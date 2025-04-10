@@ -4,7 +4,6 @@ import * as admin from "firebase-admin";
 admin.initializeApp();
 
 export const generateCode = functions.https.onRequest(async (req, res) => {
-  // Optional: Restrict to POST requests
   if (req.method !== "POST") {
     res.status(405).send({ error: "Method Not Allowed" });
     return;
@@ -16,7 +15,6 @@ export const generateCode = functions.https.onRequest(async (req, res) => {
   let code: string;
   let exists = false;
 
-  // Keep generating until a unique code is found
   do {
     code = Array.from({ length: 5 }, () =>
       charset[Math.floor(Math.random() * charset.length)]
@@ -25,12 +23,31 @@ export const generateCode = functions.https.onRequest(async (req, res) => {
     exists = doc.exists;
   } while (exists);
 
-  // Store the code with a timestamp and "waiting" status
   await db.collection("codes").doc(code).set({
     timestamp: admin.firestore.Timestamp.now(),
     status: "waiting"
   });
 
-  // Send the response (but don't return it)
   res.status(200).json({ code });
+});
+
+export const deleteCode = functions.https.onRequest(async (req, res) => {
+  if (req.method !== "POST") {
+    res.status(405).send({ error: "Method Not Allowed" });
+    return;
+  }
+
+  const { code } = req.body;
+  if (!code) {
+    res.status(400).send({ error: "Missing code" });
+    return;
+  }
+
+  try {
+    await admin.firestore().collection("codes").doc(code).delete();
+    res.status(200).json({ message: `Code ${code} deleted.` });
+  } catch (error) {
+    console.error("Error deleting code:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
 });
