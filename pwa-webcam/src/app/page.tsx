@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import React, { useState } from "react";
 
 const CodeInput = React.lazy(() => import("../../components/CodeInput"));
@@ -16,6 +16,17 @@ export default function Home() {
   const toggleMic = () => {
     setStreams((prev) => ({ ...prev, mic: !prev.mic }));
   };
+
+  const handleStartStream = () => {
+    const joinedCode = code.join("").trim();
+
+    if (joinedCode.length !== 5) {
+      alert("Please enter a valid 5-character code.");
+      return;
+    }
+
+    
+  }
 
   return (
     <section className="flex flex-col w-screen items-center">
@@ -42,9 +53,9 @@ export default function Home() {
       >
         Stream Microphone
       </button>
-      <Link href="./stream" className="w-9/10 my-5 px-5 py-5 rounded-2xl text-4xl text-center bg-green-600 text-white hover:bg-green-700" aria-label="Start Stream">
+      <button onClick={handleStartStream} className="w-9/10 my-5 px-5 py-5 rounded-2xl text-4xl text-center bg-green-600 text-white hover:bg-green-700" aria-label="Start Stream">
         Start Stream
-      </Link>
+      </button>
     </section>
   );
 }
