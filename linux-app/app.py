@@ -11,36 +11,39 @@ from aiortc import RTCPeerConnection, RTCSessionDescription
 from concurrent.futures import ThreadPoolExecutor
 executor = ThreadPoolExecutor(max_workers=1)
 
+
+# TODO: fix linux app sdp answer, finish implementing hide to tray feature, finish PWA audio indicator
+
+
 def handle_offer_and_submit_answer(offer_data, code):
     async def run():
         pc = RTCPeerConnection()
 
-        # Set remote description (the offer from the phone)
+        # Set remote description (from phone)
         offer = offer_data['offer']
         await pc.setRemoteDescription(RTCSessionDescription(sdp=offer['sdp'], type=offer['type']))
 
-        # (Optional) Add remote ICE candidates
+        # (Optional) Add ICE candidates from phone
         for c in offer_data.get('candidates', []):
             try:
                 await pc.addIceCandidate(c)
             except Exception as e:
                 print(f"⚠️ Failed to add ICE candidate: {e}")
 
-        # Create an answer
+        # Create and set answer
         answer = await pc.createAnswer()
         await pc.setLocalDescription(answer)
 
         # Wait for ICE gathering to complete
         await asyncio.sleep(2)
 
-        # Prepare payload
         payload = {
             "code": code,
             "answer": {
                 "type": pc.localDescription.type,
                 "sdp": pc.localDescription.sdp
             },
-            "candidates": []  # You can collect and add pc.iceGatherer.getLocalCandidates() here if needed
+            "candidates": []  # Add ICE candidates if desired
         }
 
         try:
@@ -50,8 +53,7 @@ def handle_offer_and_submit_answer(offer_data, code):
         except Exception as e:
             print(f"❌ Failed to submit answer: {e}")
 
-    asyncio.ensure_future(run())
-
+    # This is the important part to avoid the warning
     asyncio.run(run())
 
 class PixelStreamerApp(QMainWindow):
