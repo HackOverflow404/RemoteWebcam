@@ -35,3 +35,11 @@
 | ☁️ Backend | Firebase (Firestore, Cloud Functions, Hosting) |
 | 🔄 Signaling | Firebase Firestore |
 | 🧪 Media | WebRTC Peer-to-Peer |
+
+## 🖼️ Screenshots
+
+### Laptop App (Qt UI)
+![Laptop UI](./assets/laptop-ui.png)
+
+### Phone App (React Web)
+![Phone UI](./assets/phone-ui.png)
