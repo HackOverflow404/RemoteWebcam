@@ -8,6 +8,13 @@ const CodeInput = React.lazy(() => import("../../components/CodeInput"));
 export default function Home() {
   const [code, setCode] = useState(Array(5).fill(""));
   const [streams, setStreams] = useState({ webcam: true, mic: true });
+  const servers = {
+    iceServers: [
+      {
+        urls: ['stun:stun1.1.google.com:19302', 'stun:stun2.1.google.com:19302']
+      }
+    ]
+  };
 
   const toggleWebcam = () => {
     setStreams((prev) => ({ ...prev, webcam: !prev.webcam }));
@@ -17,16 +24,75 @@ export default function Home() {
     setStreams((prev) => ({ ...prev, mic: !prev.mic }));
   };
 
-  const handleStartStream = () => {
-    const joinedCode = code.join("").trim();
+  const handleStartStream = async () => {
+    const joinedCode = code.join("").trim().toUpperCase();
 
     if (joinedCode.length !== 5) {
       alert("Please enter a valid 5-character code.");
       return;
     }
 
-    
-  }
+    const peer = new RTCPeerConnection(servers);
+    const candidates: RTCIceCandidateInit[] = [];
+
+    try {
+      const constraints: MediaStreamConstraints = {
+        video: streams.webcam,
+        audio: streams.mic,
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      stream.getTracks().forEach((track) => peer.addTrack(track, stream));
+
+      peer.onicecandidate = (event) => {
+        if (event.candidate) {
+          candidates.push(event.candidate.toJSON());
+        }
+      };
+
+      const offer = await peer.createOffer();
+      await peer.setLocalDescription(offer);
+
+      // Wait until ICE gathering is complete
+      await new Promise<void>((resolve) => {
+        const timeout = setTimeout(resolve, 3000);
+        peer.onicegatheringstatechange = () => {
+          if (peer.iceGatheringState === "complete") {
+            clearTimeout(timeout);
+            resolve();
+          }
+        };
+      });
+
+      // Send to Firebase Function
+      const response = await fetch("https://retrievecode-qaf2yvcrrq-uc.a.run.app", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code: joinedCode,
+          offer,
+          candidates,
+          metadata: {
+            mic: streams.mic,
+            webcam: streams.webcam,
+            platform: "mobile",
+          }
+        })
+      });
+
+      const result = await response.json();
+      if (!response.ok) {
+        console.error("Error:", result.error);
+        alert(`Failed to start stream: ${result.error}`);
+        return;
+      }
+
+      console.log("Sent offer & candidates successfully!", result);
+    } catch (error: any) {
+      console.error("Error during stream setup:", error);
+      alert("Failed to start stream: " + error.message);
+    }
+  };
 
   return (
     <section className="flex flex-col w-screen items-center">
