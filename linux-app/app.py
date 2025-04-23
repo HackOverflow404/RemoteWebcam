@@ -4,16 +4,67 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, QV
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont, QIcon
 import requests
+import asyncio
+import time
+import random
+from aiortc import RTCPeerConnection, RTCSessionDescription
+from concurrent.futures import ThreadPoolExecutor
+executor = ThreadPoolExecutor(max_workers=1)
+
+def handle_offer_and_submit_answer(offer_data, code):
+    async def run():
+        pc = RTCPeerConnection()
+
+        # Set remote description (the offer from the phone)
+        offer = offer_data['offer']
+        await pc.setRemoteDescription(RTCSessionDescription(sdp=offer['sdp'], type=offer['type']))
+
+        # (Optional) Add remote ICE candidates
+        for c in offer_data.get('candidates', []):
+            try:
+                await pc.addIceCandidate(c)
+            except Exception as e:
+                print(f"⚠️ Failed to add ICE candidate: {e}")
+
+        # Create an answer
+        answer = await pc.createAnswer()
+        await pc.setLocalDescription(answer)
+
+        # Wait for ICE gathering to complete
+        await asyncio.sleep(2)
+
+        # Prepare payload
+        payload = {
+            "code": code,
+            "answer": {
+                "type": pc.localDescription.type,
+                "sdp": pc.localDescription.sdp
+            },
+            "candidates": []  # You can collect and add pc.iceGatherer.getLocalCandidates() here if needed
+        }
+
+        try:
+            res = requests.post("https://submitanswer-qaf2yvcrrq-uc.a.run.app", json=payload)
+            res.raise_for_status()
+            print("✅ Answer submitted successfully.")
+        except Exception as e:
+            print(f"❌ Failed to submit answer: {e}")
+
+    asyncio.ensure_future(run())
+
+    asyncio.run(run())
 
 class PixelStreamerApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.code = None
-        # servers = [
-        #     iceServers: {
+        # self.servers = {
+        #     iceServers: [
+        #     {
         #         urls: ['stun:stun1.1.google.com:19302', 'stun:stun2.1.google.com:19302']
         #     }
-        # ]
+        #     ]
+        # }
         self.initUI()
 
     def initUI(self):
@@ -154,7 +205,7 @@ class PixelStreamerApp(QMainWindow):
         self.code = self.request_code()
         button.setText(self.code)
         button.setEnabled(True)
-        self.generate_code_action = QAction(self.code, self)
+        self.wait_for_offer()
 
     def request_code(self):
         try:
@@ -165,6 +216,50 @@ class PixelStreamerApp(QMainWindow):
             print(f"Failed to generate code: {e}")
             return "Error"
 
+    def wait_for_offer(self):
+        self.poll_attempt = 0
+        self.max_attempts = 6
+        self.base_delay = 1.0  # seconds
+        self.max_delay = 30.0
+        self.poll_timer = QTimer()
+        self.poll_timer.setSingleShot(True)
+
+        def poll():
+            print(f"[Polling] Attempt {self.poll_attempt + 1}")
+            try:
+                response = requests.post(
+                    "https://checkcodestatus-qaf2yvcrrq-uc.a.run.app",
+                    json={"code": self.code},
+                    timeout=5
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    print("✅ Offer received! Responding...")
+
+                    executor.submit(handle_offer_and_submit_answer, data, self.code)
+                    return
+                elif response.status_code == 204:
+                    print("🕐 Not ready yet...")
+                else:
+                    print(f"⚠️ Unexpected status: {response.status_code}")
+            except Exception as e:
+                print(f"❌ Poll error: {e}")
+
+            self.poll_attempt += 1
+            if self.poll_attempt >= self.max_attempts:
+                print("⛔ Gave up waiting for offer.")
+                return
+
+            # Exponential backoff with full jitter
+            exp_delay = min(self.max_delay, self.base_delay * (2 ** self.poll_attempt))
+            delay = random.uniform(0, exp_delay)
+            print(f"🔁 Retrying in {delay:.2f} seconds...")
+            self.poll_timer.start(int(delay * 1000))
+
+        # Kick off the first poll
+        self.poll_timer.timeout.connect(poll)
+        poll()
+    
     def handle_code_deletion(self, button):
         self.delete_code()
         button.setText(self.buttons[0])
