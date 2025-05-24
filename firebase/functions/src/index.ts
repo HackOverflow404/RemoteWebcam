@@ -1,10 +1,14 @@
 import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
+import fetch from "node-fetch";
+import dotenv from "dotenv";
 import corsLib from "cors";
 
 admin.initializeApp();
 const db = admin.firestore();
 const cors = corsLib({ origin: true });
+
+dotenv.config();
 
 // --- Shared Utilities ---
 
@@ -267,6 +271,22 @@ export const updateOffer = functions.https.onRequest((req, res) => {
       return res.status(200).json({ success: true, message: "Offer updated successfully" });
     } catch (error) {
       functions.logger.error("Error in updateOffer function:", error);
+      return sendError(res, 500, "Internal server error");
+    }
+  });
+});
+
+export const getTurnCredentials = functions.https.onRequest(async (req, res) => {
+  cors(req, res, async () => {
+    try {
+      if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
+
+      const apiKey = process.env.METERED_API_KEY;
+      const response = await fetch(`https://hackoverflow.metered.live/api/v1/turn/credentials?apiKey=${apiKey}`);
+      const iceServers = await response.json();
+      res.status(200).json(iceServers);
+    } catch (error) {
+      functions.logger.error("Error in geTurnCredentials function:", error);
       return sendError(res, 500, "Internal server error");
     }
   });
