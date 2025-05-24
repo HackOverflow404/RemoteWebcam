@@ -6,15 +6,10 @@ import React, { useState } from "react";
 const CodeInput = React.lazy(() => import("../../components/CodeInput"));
 
 export default function Home() {
+  const router = useRouter();
   const [code, setCode] = useState(Array(5).fill(""));
   const [streams, setStreams] = useState({ webcam: true, mic: true });
-  const servers = {
-    iceServers: [
-      {
-        urls: ['stun:stun1.1.google.com:19302', 'stun:stun2.1.google.com:19302']
-      }
-    ]
-  };
+  const [isLoading, setIsLoading] = useState(false);
 
   const toggleWebcam = () => {
     setStreams((prev) => ({ ...prev, webcam: !prev.webcam }));
@@ -32,65 +27,34 @@ export default function Home() {
       return;
     }
 
-    const peer = new RTCPeerConnection(servers);
-    const candidates: RTCIceCandidateInit[] = [];
+    setIsLoading(true);
 
     try {
-      const constraints: MediaStreamConstraints = {
-        video: streams.webcam,
-        audio: streams.mic,
-      };
-
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      stream.getTracks().forEach((track) => peer.addTrack(track, stream));
-
-      peer.onicecandidate = (event) => {
-        if (event.candidate) {
-          candidates.push(event.candidate.toJSON());
-        }
-      };
-
-      const offer = await peer.createOffer();
-      await peer.setLocalDescription(offer);
-
-      // Wait until ICE gathering is complete
-      await new Promise<void>((resolve) => {
-        const timeout = setTimeout(resolve, 3000);
-        peer.onicegatheringstatechange = () => {
-          if (peer.iceGatheringState === "complete") {
-            clearTimeout(timeout);
-            resolve();
-          }
-        };
-      });
-
-      // Send to Firebase Function
-      const response = await fetch("https://retrievecode-qaf2yvcrrq-uc.a.run.app", {
+      // Validate the code exists in Firestore via your Firebase Function
+      const response = await fetch("https://validatecode-qaf2yvcrrq-uc.a.run.app", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          code: joinedCode,
-          offer,
-          candidates,
-          metadata: {
-            mic: streams.mic,
-            webcam: streams.webcam,
-            platform: "mobile",
-          }
+          code: joinedCode
         })
       });
 
       const result = await response.json();
-      if (!response.ok) {
+      
+      if (!(response.ok && result.success && result.valid)) {
         console.error("Error:", result.error);
-        alert(`Failed to start stream: ${result.error}`);
+        alert(`Invalid code: ${result.error}`);
+        setIsLoading(false);
         return;
       }
 
-      console.log("Sent offer & candidates successfully!", result);
+      // Navigate to the stream page with parameters
+      router.push(`/stream?code=${joinedCode}&webcam=${streams.webcam}&mic=${streams.mic}`);
+      
     } catch (error: any) {
-      console.error("Error during stream setup:", error);
-      alert("Failed to start stream: " + error.message);
+      console.error("Error validating code:", error);
+      alert("Failed to validate code: " + error.message);
+      setIsLoading(false);
     }
   };
 
@@ -119,8 +83,15 @@ export default function Home() {
       >
         Stream Microphone
       </button>
-      <button onClick={handleStartStream} className="w-9/10 my-5 px-5 py-5 rounded-2xl text-4xl text-center bg-green-600 text-white hover:bg-green-700" aria-label="Start Stream">
-        Start Stream
+      <button 
+        onClick={handleStartStream} 
+        disabled={isLoading}
+        className={`w-9/10 my-5 px-5 py-5 rounded-2xl text-4xl text-center ${
+          isLoading ? "bg-gray-400" : "bg-green-600 hover:bg-green-700"
+        } text-white`} 
+        aria-label="Start Stream"
+      >
+        {isLoading ? "Connecting..." : "Start Stream"}
       </button>
     </section>
   );
