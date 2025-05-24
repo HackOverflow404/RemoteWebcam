@@ -9,62 +9,61 @@ interface CodeInputProps {
 export default function CodeInput({ code, setCode }: CodeInputProps) {
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
-  // Handles backspace behavior
   const handleKeyDown = (index: number, event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Backspace") {
+    const key = event.key;
+
+    // Only allow alphanumeric keys
+    if (/^[a-zA-Z0-9]$/.test(key)) {
+      setCode((prevCode) => {
+        const newCode = [...prevCode];
+        newCode[index] = key.toUpperCase();
+        return newCode;
+      });
+
+      // Focus next input
+      if (index < code.length - 1) {
+        setTimeout(() => inputRefs.current[index + 1]?.focus(), 0);
+      }
+
+      event.preventDefault(); // Prevent character duplication
+    }
+
+    // Handle Backspace
+    else if (key === "Backspace") {
       if (code[index]) {
+        // Clear current box
         setCode((prevCode) => {
           const newCode = [...prevCode];
           newCode[index] = "";
           return newCode;
         });
-        if (inputRefs.current[index]) {
-          inputRefs.current[index].value = "";
-        }
-        return;
+      } else if (index > 0) {
+        // Move focus back
+        setTimeout(() => inputRefs.current[index - 1]?.focus(), 0);
+        setCode((prevCode) => {
+          const newCode = [...prevCode];
+          newCode[index - 1] = "";
+          return newCode;
+        });
       }
 
-      setCode((prevCode) => {
-        const newCode = [...prevCode];
-        newCode[index - 1] = "";
-        return newCode;
-      });
-      if (inputRefs.current && inputRefs.current[index - 1]) {
-        inputRefs.current[index - 1]!.value = "";
-        inputRefs.current[index - 1]!.focus();
-      }
-      return;
-    }
-
-    if (!/^[a-zA-Z0-9]$/.test(event.key)) {
-      return;
-    }
-
-    setCode((prevCode) => {
-      const newCode = [...prevCode];
-      newCode[index] = event.key.toUpperCase();
-      return newCode;
-    });
-
-    if (index < code.length - 1) {
-      inputRefs.current[index + 1]?.focus();
+      event.preventDefault();
     }
   };
 
   return (
     <div className="w-screen mb-5 flex justify-evenly">
-      {code.map((char: string, index: number) => (
+      {code.map((char, index) => (
         <input
           key={index}
-          ref={(element: HTMLInputElement | null) => {
-            inputRefs.current[index] = element;
-          }}
+          ref={(el) => { inputRefs.current[index] = el; }}
           type="text"
+          inputMode="text"
           maxLength={1}
           value={char}
           onKeyDown={(e) => handleKeyDown(index, e)}
+          onChange={() => {}}
           aria-label={`Code input ${index + 1}`}
-          onChange={() => {/* Do nothing - onKeyDown handles all logic */}}
           className="w-15 h-25 bg-gray-400 rounded-2xl
                      text-center text-black text-4xl font-bold
                      focus:outline-none focus:ring-2 focus:ring-blue-500"
