@@ -67,13 +67,7 @@ export default function StreamPage() {
   }, [mediaStreamError]);
 
   const startStream = () => {
-    const peerConnection = new RTCPeerConnection({
-      iceServers: [
-        { urls: "stun:stun.l.google.com:19302" },
-        { urls: "stun:stun1.l.google.com:19302" },
-      ],
-    });
-    peerConnectionRef.current = peerConnection;
+    let peerConnection: RTCPeerConnection;
     let sdpOffer: RTCSessionDescription | null = null;
     let backoffDelay = 2000;
   
@@ -90,6 +84,17 @@ export default function StreamPage() {
       });
   
     const init = async () => {
+      const response = await fetch("https://getturncredentials-qaf2yvcrrq-uc.a.run.app", { method: "POST" });
+      if (!response.ok) {
+        console.error("Failed to fetch ICE servers");
+        setErrorMessage("Failed to fetch ICE servers");
+        return;
+      }
+      const { iceServers } = await response.json();
+
+      peerConnection = new RTCPeerConnection({ iceServers });
+      peerConnectionRef.current = peerConnection;
+
       if (!media) {
         console.error("No media stream available");
         setErrorMessage("No media stream available");
@@ -97,11 +102,18 @@ export default function StreamPage() {
       }
   
       media.getTracks().forEach((track) => {
-        peerConnection.addTransceiver(track.kind, {
-          direction: "sendonly",
-          streams: [media],
-        });
+        const sender = peerConnection.addTrack(track, media);
+        const transceiver = peerConnection.getTransceivers().find(t => t.sender === sender);
+        if (transceiver) {
+          transceiver.direction = "sendonly";
+        }
       });
+      
+      peerConnection.getTransceivers().forEach((t, i) => {
+        console.log(`[Transceiver ${i}] kind: ${t.sender.track?.kind}, direction: ${t.direction}`);
+      });      
+      console.log("Senders:", peerConnection.getSenders());
+
     };
   
     const createOffer = async () => {
@@ -118,6 +130,19 @@ export default function StreamPage() {
   
       const offer = await peerConnection.createOffer();
       await peerConnection.setLocalDescription(offer);
+
+      setInterval(async () => {
+        const stats = await peerConnection.getStats();
+        stats.forEach(report => {
+          if (report.type === "outbound-rtp" && report.kind === "video") {
+            console.log("📤 Video Sent:", {
+              packetsSent: report.packetsSent,
+              bytesSent: report.bytesSent,
+            });
+          }
+        });
+      }, 3000);      
+
       await waitForIceGathering();
   
       sdpOffer = peerConnection.localDescription;

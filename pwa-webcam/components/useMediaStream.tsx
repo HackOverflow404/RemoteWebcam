@@ -59,6 +59,11 @@ export default function useMediaStream({ initialAudio = true, initialVideo = tru
         const mediaStream = await navigator.mediaDevices.getUserMedia(
           getConstraints(overrideVideo, overrideAudio, overrideFacing)
         );
+
+        console.log("Video Tracks:", mediaStream.getVideoTracks());
+        mediaStream.getVideoTracks().forEach(track => {
+          console.log("Enabled:", track.enabled, "ReadyState:", track.readyState);
+        });
   
         if (videoRef.current) {
           videoRef.current.srcObject = mediaStream;
