@@ -1,6 +1,6 @@
 import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
-import fetch from "node-fetch";
+import twilio from "twilio";
 import dotenv from "dotenv";
 import corsLib from "cors";
 
@@ -13,281 +13,284 @@ dotenv.config();
 // --- Shared Utilities ---
 
 function sendError(res: any, code: number, message: string) {
-  return res.status(code).json({ error: message });
+    return res.status(code).json({ error: message });
 }
 
 function isValidCode(code: string): boolean {
-  return typeof code === "string" && code.trim().length === 5;
+    return typeof code === "string" && code.trim().length === 5;
 }
 
 async function getCodeDoc(code: string) {
-  const docRef = db.collection("codes").doc(code.toUpperCase());
-  const doc = await docRef.get();
-  return { docRef, doc, data: doc.data() };
+    const docRef = db.collection("codes").doc(code.toUpperCase());
+    const doc = await docRef.get();
+    return { docRef, doc, data: doc.data() };
 }
 
 // --- Functions ---
 
 export const generateCode = functions.https.onRequest((req, res) => {
-  cors(req, res, async () => {
-    try {
-      if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
+    cors(req, res, async () => {
+        try {
+            if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
 
-      functions.logger.info("Generate Function: Request body:", { body: req.body });
+            functions.logger.info("Generate Function: Request body:", { body: req.body });
 
-      const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-      let code: string;
-      let exists = false;
+            const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+            let code: string;
+            let exists = false;
 
-      do {
-        code = Array.from({ length: 5 }, () => charset[Math.floor(Math.random() * charset.length)]).join("");
-        const doc = await db.collection("codes").doc(code).get();
-        exists = doc.exists;
-      } while (exists);
+            do {
+                code = Array.from({ length: 5 }, () => charset[Math.floor(Math.random() * charset.length)]).join("");
+                const doc = await db.collection("codes").doc(code).get();
+                exists = doc.exists;
+            } while (exists);
 
-      await db.collection("codes").doc(code).set({
-        timestamp: admin.firestore.Timestamp.now(),
-        status: "waiting"
-      });
+            await db.collection("codes").doc(code).set({
+                timestamp: admin.firestore.Timestamp.now(),
+                status: "waiting"
+            });
 
-      return res.status(200).json({ code });
-    } catch (error) {
-      functions.logger.error("Error in  function:", error);
-      return sendError(res, 500, "Internal server error");
-    }
-  });
+            return res.status(200).json({ code });
+        } catch (error) {
+            functions.logger.error("Error in    function:", error);
+            return sendError(res, 500, "Internal server error");
+        }
+    });
 });
 
 export const deleteCode = functions.https.onRequest((req, res) => {
-  cors(req, res, async () => {
-    try {
-      if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
+    cors(req, res, async () => {
+        try {
+            if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
 
-      functions.logger.info("Delete Function: Request body:", { body: req.body });
+            functions.logger.info("Delete Function: Request body:", { body: req.body });
 
-      let { code } = req.body;
-      code = (code || "").trim().toUpperCase();
-      if (!code) return sendError(res, 400, "Missing code");
-      if (!isValidCode(code)) return sendError(res, 400, "Invalid code format");
-      
-      await db.collection("codes").doc(code).delete();
-      return res.status(200).json({ message: `Code ${code} deleted.` });
-    } catch (error) {
-      functions.logger.error("Error in  function:", error);
-      return sendError(res, 500, "Internal server error");
-    }
-  });
+            let { code } = req.body;
+            code = (code || "").trim().toUpperCase();
+            if (!code) return sendError(res, 400, "Missing code");
+            if (!isValidCode(code)) return sendError(res, 400, "Invalid code format");
+            
+            await db.collection("codes").doc(code).delete();
+            return res.status(200).json({ message: `Code ${code} deleted.` });
+        } catch (error) {
+            functions.logger.error("Error in    function:", error);
+            return sendError(res, 500, "Internal server error");
+        }
+    });
 });
 
 export const validateCode = functions.https.onRequest((req, res) => { 
-  cors(req, res, async () => {
-    try {
-      if (req.method !== "POST") {
-        return sendError(res, 405, "Method not Allowed");
-      }
+    cors(req, res, async () => {
+        try {
+            if (req.method !== "POST") {
+                return sendError(res, 405, "Method not Allowed");
+            }
 
-      functions.logger.info("Validate Function: Request body:", {body: req.body});
+            functions.logger.info("Validate Function: Request body:", {body: req.body});
 
-      let { code } = req.body;
-      code = (code || "").trim().toUpperCase();
+            let { code } = req.body;
+            code = (code || "").trim().toUpperCase();
 
-      if (!code) return sendError(res, 400, "Missing code");
-      if (!isValidCode(code)) return sendError(res, 400, "Invalid code format");
+            if (!code) return sendError(res, 400, "Missing code");
+            if (!isValidCode(code)) return sendError(res, 400, "Invalid code format");
 
-      const { doc, data } = await getCodeDoc(code);
+            const { doc, data } = await getCodeDoc(code);
 
-      if (!doc.exists || !data) {
-        return res.status(404).json({ 
-          success: false,
-          valid: false,
-          message: "Code not found" 
-        });
-      }
+            if (!doc.exists || !data) {
+                return res.status(404).json({ 
+                    success: false,
+                    valid: false,
+                    message: "Code not found" 
+                });
+            }
 
-      if (data.status !== "waiting") {
-        return res.status(409).json({
-          success: true,
-          valid: false,
-          message: "Code already used"
-        });
-      }
+            if (data.status !== "waiting") {
+                return res.status(409).json({
+                    success: true,
+                    valid: false,
+                    message: "Code already used"
+                });
+            }
 
-      return res.status(200).json({
-        success: true,
-        valid: true,
-        message: "Code is valid"
-      });
-    } catch (error) {
-      functions.logger.error("Error in validateCode function:", error);
-      return sendError(res, 500, "Internal server error");
-    }
-  });
+            return res.status(200).json({
+                success: true,
+                valid: true,
+                message: "Code is valid"
+            });
+        } catch (error) {
+            functions.logger.error("Error in validateCode function:", error);
+            return sendError(res, 500, "Internal server error");
+        }
+    });
 });
 
 export const submitOffer = functions.https.onRequest((req, res) => {
-  cors(req, res, async () => {
-    try {
-      if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
+    cors(req, res, async () => {
+        try {
+            if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
 
-      functions.logger.info("Submit Offer Function: Request body:", { body: req.body });
+            functions.logger.info("Submit Offer Function: Request body:", { body: req.body });
 
-      let { code, offer, metadata } = req.body;
-      code = (code || "").trim().toUpperCase();
+            let { code, offer, metadata } = req.body;
+            code = (code || "").trim().toUpperCase();
 
-      if (!isValidCode(code)) return sendError(res, 400, "Invalid code format");
-      if (!offer || typeof offer !== "object") return sendError(res, 400, "Missing or invalid SDP offer");
+            if (!isValidCode(code)) return sendError(res, 400, "Invalid code format");
+            if (!offer || typeof offer !== "object") return sendError(res, 400, "Missing or invalid SDP offer");
 
-      const { docRef, doc, data } = await getCodeDoc(code);
+            const { docRef, doc, data } = await getCodeDoc(code);
 
-      if (!doc.exists || !data) return sendError(res, 404, "Code not found");
-      if (data.status !== "waiting") return sendError(res, 409, "Code already used or invalid");
+            if (!doc.exists || !data) return sendError(res, 404, "Code not found");
+            if (data.status !== "waiting") return sendError(res, 409, "Code already used or invalid");
 
-      await docRef.update({
-        offer,
-        metadata: metadata || null,
-        status: "offered",
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+            await docRef.update({
+                offer,
+                metadata: metadata || null,
+                status: "offered",
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
 
-      return res.status(200).json({ success: true, message: "Offer and ICE candidates saved" });
-    } catch (error) {
-      functions.logger.error("Error in submitOffer function:", error);
-      return sendError(res, 500, "Internal server error");
-    }
-  });
+            return res.status(200).json({ success: true, message: "Offer and ICE candidates saved" });
+        } catch (error) {
+            functions.logger.error("Error in submitOffer function:", error);
+            return sendError(res, 500, "Internal server error");
+        }
+    });
 });
 
 export const checkOffer = functions.https.onRequest((req, res) => {
-  cors(req, res, async () => {
-    try {
-      if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
+    cors(req, res, async () => {
+        try {
+            if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
 
-      functions.logger.info("Check Offer Function: Request body:", { body: req.body });
-      let { code } = req.body;
-      code = (code || "").trim().toUpperCase();
+            functions.logger.info("Check Offer Function: Request body:", { body: req.body });
+            let { code } = req.body;
+            code = (code || "").trim().toUpperCase();
 
-      if (!isValidCode(code)) return sendError(res, 400, "Invalid or missing code");
+            if (!isValidCode(code)) return sendError(res, 400, "Invalid or missing code");
 
-      const { doc, data } = await getCodeDoc(code);
+            const { doc, data } = await getCodeDoc(code);
 
-      if (!doc.exists || !data) return sendError(res, 404, "Code not found");
-      if (data.status !== "offered") return res.status(204).send();
+            if (!doc.exists || !data) return sendError(res, 404, "Code not found");
+            if (data.status !== "offered") return res.status(204).send();
 
-      return res.status(200).json({
-        offer: data.offer,
-        candidates: data.candidates,
-        metadata: data.metadata || null,
-      });
-    } catch (error) {
-      functions.logger.error("Error in checkOffer function:", error);
-      return sendError(res, 500, "Internal server error");
-    }
-  });
+            return res.status(200).json({
+                offer: data.offer,
+                candidates: data.candidates,
+                metadata: data.metadata || null,
+            });
+        } catch (error) {
+            functions.logger.error("Error in checkOffer function:", error);
+            return sendError(res, 500, "Internal server error");
+        }
+    });
 });
 
 export const submitAnswer = functions.https.onRequest((req, res) => {
-  cors(req, res, async () => {
-    try {
-      if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
+    cors(req, res, async () => {
+        try {
+            if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
 
-      let { code, answer, candidates } = req.body;
-      code = (code || "").trim().toUpperCase();
+            let { code, answer, candidates } = req.body;
+            code = (code || "").trim().toUpperCase();
 
-      if (!code || !answer || typeof code !== "string") {
-        return sendError(res, 400, "Missing required fields");
-      }
+            if (!code || !answer || typeof code !== "string") {
+                return sendError(res, 400, "Missing required fields");
+            }
 
-      const { docRef, doc } = await getCodeDoc(code);
+            const { docRef, doc } = await getCodeDoc(code);
 
-      if (!doc.exists) return sendError(res, 404, "Code not found");
+            if (!doc.exists) return sendError(res, 404, "Code not found");
 
-      await docRef.update({
-        answer,
-        answerCandidates: candidates || [],
-        status: "answered",
-      });
+            await docRef.update({
+                answer,
+                answerCandidates: candidates || [],
+                status: "answered",
+            });
 
-      return res.status(200).json({ success: true });
-    } catch (error) {
-      functions.logger.error("Error in submitAnswer function:", error);
-      return sendError(res, 500, "Internal server error");
-    }
-  });
+            return res.status(200).json({ success: true });
+        } catch (error) {
+            functions.logger.error("Error in submitAnswer function:", error);
+            return sendError(res, 500, "Internal server error");
+        }
+    });
 });
 
 export const checkAnswer = functions.https.onRequest((req, res) => {
-  cors(req, res, async () => {
-    try {
-      if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
+    cors(req, res, async () => {
+        try {
+            if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
 
-      functions.logger.info("Check Answer Function: Request body:", { body: req.body });
+            functions.logger.info("Check Answer Function: Request body:", { body: req.body });
 
-      let { code } = req.body;
-      code = (code || "").trim().toUpperCase();
+            let { code } = req.body;
+            code = (code || "").trim().toUpperCase();
 
-      if (!isValidCode(code)) return sendError(res, 400, "Invalid or missing code");
+            if (!isValidCode(code)) return sendError(res, 400, "Invalid or missing code");
 
-      const { doc, data } = await getCodeDoc(code);
+            const { doc, data } = await getCodeDoc(code);
 
-      if (!doc.exists || !data) return sendError(res, 404, "Code not found");
-      if (data.status !== "answered") return res.status(204).send();
+            if (!doc.exists || !data) return sendError(res, 404, "Code not found");
+            if (data.status !== "answered") return res.status(204).send();
 
-      return res.status(200).json({
-        answer: data.answer,
-        candidates: data.answerCandidates || [],
-      });
-    } catch (error) {
-      functions.logger.error("Error in checkAnswer function:", error);
-      return sendError(res, 500, "Internal server error");
-    }
-  });
+            return res.status(200).json({
+                answer: data.answer,
+                candidates: data.answerCandidates || [],
+            });
+        } catch (error) {
+            functions.logger.error("Error in checkAnswer function:", error);
+            return sendError(res, 500, "Internal server error");
+        }
+    });
 });
 
 export const updateOffer = functions.https.onRequest((req, res) => {
-  cors(req, res, async () => {
-    try {
-      if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
+    cors(req, res, async () => {
+        try {
+            if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
 
-      functions.logger.info("Update Offer Function: Request body:", { body: req.body });
+            functions.logger.info("Update Offer Function: Request body:", { body: req.body });
 
-      let { code, offer, candidates, metadata } = req.body;
-      code = (code || "").trim().toUpperCase();
+            let { code, offer, candidates, metadata } = req.body;
+            code = (code || "").trim().toUpperCase();
 
-      if (!isValidCode(code)) return sendError(res, 400, "Invalid code format");
-      if (!offer || typeof offer !== "object") return sendError(res, 400, "Missing or invalid SDP offer");
-      if (!Array.isArray(candidates)) return sendError(res, 400, "Missing or invalid ICE candidates");
+            if (!isValidCode(code)) return sendError(res, 400, "Invalid code format");
+            if (!offer || typeof offer !== "object") return sendError(res, 400, "Missing or invalid SDP offer");
+            if (!Array.isArray(candidates)) return sendError(res, 400, "Missing or invalid ICE candidates");
 
-      const { docRef, doc } = await getCodeDoc(code);
+            const { docRef, doc } = await getCodeDoc(code);
 
-      if (!doc.exists) return sendError(res, 404, "Code not found");
+            if (!doc.exists) return sendError(res, 404, "Code not found");
 
-      await docRef.update({
-        offer,
-        candidates,
-        metadata: metadata || null,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+            await docRef.update({
+                offer,
+                candidates,
+                metadata: metadata || null,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
 
-      return res.status(200).json({ success: true, message: "Offer updated successfully" });
-    } catch (error) {
-      functions.logger.error("Error in updateOffer function:", error);
-      return sendError(res, 500, "Internal server error");
-    }
-  });
+            return res.status(200).json({ success: true, message: "Offer updated successfully" });
+        } catch (error) {
+            functions.logger.error("Error in updateOffer function:", error);
+            return sendError(res, 500, "Internal server error");
+        }
+    });
 });
 
 export const getTurnCredentials = functions.https.onRequest(async (req, res) => {
-  cors(req, res, async () => {
-    try {
-      if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
+    cors(req, res, async () => {
+        try {
+            if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
 
-      const apiKey = process.env.METERED_API_KEY;
-      const response = await fetch(`https://hackoverflow.metered.live/api/v1/turn/credentials?apiKey=${apiKey}`);
-      const iceServers = await response.json();
-      res.status(200).json(iceServers);
-    } catch (error) {
-      functions.logger.error("Error in geTurnCredentials function:", error);
-      return sendError(res, 500, "Internal server error");
-    }
-  });
+            const accountSid = process.env.TWILIO_ACCOUNT_SID;
+            const authToken = process.env.TWILIO_AUTH_TOKEN;
+            const client = twilio(accountSid, authToken);
+
+            const token = await client.tokens.create();
+
+            res.status(200).json(token.iceServers);
+        } catch (error) {
+            functions.logger.error("Error in geTurnCredentials function:", error);
+            return sendError(res, 500, "Internal server error");
+        }
+    });
 });
