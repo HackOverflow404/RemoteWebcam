@@ -15,7 +15,7 @@ const icons = {
     connection: { connecting: "cloud_sync", connected: "cloud_done", disconnected: "cloud_off", error: "cloud_alert" } as const,
 };
 
-export default function StreamPage() {
+function StreamPage() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const sessionCode = searchParams.get("code") || "";
@@ -460,4 +460,14 @@ export default function StreamPage() {
             </div>
         </section>
     );
+}
+
+import { Suspense } from "react";
+
+export default function Page() {
+  return (
+    <Suspense fallback={<div>Loading stream...</div>}>
+      <StreamPage />
+    </Suspense>
+  );
 }

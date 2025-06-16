@@ -67,7 +67,7 @@ export default function Home() {
                 <CodeInput code={code} setCode={setCode} />
             </React.Suspense>
             <button
-                className={`w-9/10 my-5 px-5 py-5 rounded-2xl text-4xl text-center ${streams.webcam ? 
+                className={`w-9/10 my-5 px-5 py-5 rounded-2xl text-3xl text-center ${streams.webcam ? 
                     "bg-blue-500 text-white hover:bg-blue-700" : "bg-white text-blue-500 hover:bg-gray-100"
                 }`}
                 onClick={toggleWebcam}
@@ -76,7 +76,7 @@ export default function Home() {
                 Stream Webcam
             </button>
             <button
-                className={`w-9/10 my-5 px-5 py-5 rounded-2xl text-4xl text-center ${streams.mic ? 
+                className={`w-9/10 my-5 px-5 py-5 rounded-2xl text-3xl text-center ${streams.mic ? 
                     "bg-blue-500 text-white hover:bg-blue-700" : "bg-white text-blue-500 hover:bg-gray-100"
                 }`}
                 onClick={toggleMic}
@@ -94,6 +94,7 @@ export default function Home() {
             >
                 {isLoading ? "Connecting..." : "Start Stream"}
             </button>
+            
         </section>
     );
 }
