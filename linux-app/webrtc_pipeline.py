@@ -3,71 +3,51 @@ import json
 import threading
 import requests
 from aiortc import RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
-from PyQt5.QtCore import QObject, pyqtSignal
+from PySide6.QtCore import QObject, Signal
 from av import VideoFrame
-import gi
 import cv2
 import numpy as np
 from datetime import datetime, timedelta
+from enum import Enum
+import random
 
-gi.require_version("Gst", "1.0")
-from gi.repository import Gst
-
-Gst.init(None)
-
-class GStreamerPipeline:
-    def __init__(self, widget_win_id: int):
-        self.widget_id = widget_win_id
-        self.pipeline = None
-        self.appsrc = None
-
-    def build_pipeline(self):
-        pipeline_description = f"""
-            appsrc name=mysrc is-live=true block=true format=time do-timestamp=true !
-            videoconvert !
-            queue !
-            autovideosink sync=false
-        """
-        self.pipeline = Gst.parse_launch(pipeline_description)
-        self.appsrc = self.pipeline.get_by_name("mysrc")
-        self.pipeline.set_state(Gst.State.PLAYING)
-
-    def push_frame(self, frame_bytes, width, height, fmt="RGB"):
-        buf = Gst.Buffer.new_wrapped(frame_bytes)
-        caps = Gst.Caps.from_string(f"video/x-raw,format={fmt},width={width},height={height},framerate=30/1")
-        self.appsrc.set_caps(caps)
-        self.appsrc.emit("push-buffer", buf)
-
-    def stop(self):
-        if self.pipeline:
-            self.pipeline.set_state(Gst.State.NULL)
+class ConnectionState(Enum):
+    CONNECTING = "connecting"
+    CONNECTED = "connected"
+    DISCONNECTED = "disconnected"
+    FAILED = "failed"
 
 class WebRTCWorker(QObject):
-    video_frame_received = pyqtSignal(object)
-    connection_state_changed = pyqtSignal(str)
+    video_frame_received = Signal(object)
+    connection_state_changed = Signal(ConnectionState)
 
-    def __init__(self, code: str, widget_win_id: int, offer):
+    def __init__(self, code: str, widget_win_id: int):
         super().__init__()
         self.code = code
-        self.offer = offer
+        self.offer = None
         self.pc = None
         self.running = False
-        # self.gst_pipeline = GStreamerPipeline(widget_win_id)
 
     def start(self):
         self.running = True
         threading.Thread(target = self._run_async_thread, daemon = True).start()
+        self.connection_state_changed.emit(ConnectionState.CONNECTING)
 
     def stop(self):
         self.running = False
         if self.pc:
             asyncio.run_coroutine_threadsafe(self.pc.close(), asyncio.get_event_loop())
-            # self.gst_pipeline.stop()
+        self.connection_state_changed.emit(ConnectionState.DISCONNECTED)
 
     def _run_async_thread(self):
         asyncio.run(self._run())
 
     async def _run(self):
+        if await self.poll_for_offer() == 1:
+            return
+        if not self.offer:
+            self.connection_state_changed.emit(ConnectionState.FAILED)
+            return
         ice_servers = self.fetch_ice_servers()
         print("[TURN] Using ICE servers:", ice_servers)
         config = RTCConfiguration(iceServers = ice_servers)
@@ -77,13 +57,20 @@ class WebRTCWorker(QObject):
         async def on_connectionstatechange():
             state = self.pc.connectionState
             print(f"[WebRTC] State: {state}")
-            self.connection_state_changed.emit(state)
+            match state:
+                case "connected":
+                    self.connection_state_changed.emit(ConnectionState.CONNECTED)
+                case "closed":
+                    self.connection_state_changed.emit(ConnectionState.DISCONNECTED)
+                case "failed":
+                    self.connection_state_changed.emit(ConnectionState.FAILED)
+                case "connecting":
+                    self.connection_state_changed.emit(ConnectionState.CONNECTING)
 
         @self.pc.on("track")
         def on_track(track):
             print(f"[WebRTC] Track received: {track.kind}")
             if track.kind == "video":
-                # asyncio.ensure_future(self.consume_video(track))
                 asyncio.ensure_future(self.handle_track(track))
         
         @self.pc.on("datachannel")
@@ -97,23 +84,58 @@ class WebRTCWorker(QObject):
         @self.pc.on("icegatheringstatechange")
         async def on_icegatheringstatechange():
             print("[WebRTC] ICE gathering state:", self.pc.iceGatheringState)
-            
+            if self.pc.iceGatheringState == "complete":
+                print("[WebRTC] ICE gathering complete")
+                self.send_answer(self.pc.localDescription)
 
-        if not self.offer:
-            self.connection_state_changed.emit("failed")
-            return
-
-        self.pc.addTransceiver("video", direction="recvonly")
-        self.pc.addTransceiver("audio", direction="recvonly")
+        print("[WebRTC] Setting remote SDP offer:\n", self.offer)
+        print("\n\n\n\n\n\n\n\n")
         
         await self.pc.setRemoteDescription(RTCSessionDescription(**self.offer))
         answer = await self.pc.createAnswer()
         print("[WebRTC] Created answer:", answer)
         await self.pc.setLocalDescription(answer)
         print("[WebRTC] Local SDP answer:\n", self.pc.localDescription.sdp)
-        await asyncio.sleep(1)
-        await self.send_answer(self.pc.localDescription)
 
+    async def poll_for_offer(self):
+        self.poll_attempt = 0
+        self.max_attempts = 30
+        self.base_delay = 1.0
+        self.max_delay = 30.0
+
+        while self.poll_attempt < self.max_attempts:
+            if not self.running or self.code is None:
+                print("🛑 Polling stopped.")
+                self.connection_state_changed.emit(ConnectionState.DISCONNECTED)
+                return 1
+
+            print(f"[Polling] Attempt {self.poll_attempt + 1}")
+            try:
+                response = requests.post(
+                    "https://checkoffer-qaf2yvcrrq-uc.a.run.app",
+                    json = {"code": self.code},
+                    timeout=5
+                )
+                if response.status_code == 200:
+                    print("✅ Offer received!")
+                    self.offer = response.json().get("offer")
+                    self.connection_state_changed.emit(ConnectionState.CONNECTING)
+                    return 0
+                elif response.status_code == 204:
+                    print("🕐 Not ready yet...")
+                else:
+                    print(f"⚠️ Unexpected status: {response.status_code}")
+            except Exception as e:
+                print(f"❌ Poll error: {e}")
+
+            self.poll_attempt += 1
+            delay = random.uniform(0, min(self.max_delay, self.base_delay * (2 ** self.poll_attempt)))
+            print(f"🔁 Retrying in {delay:.2f} seconds...")
+            await asyncio.sleep(delay)
+
+        print("⛔ Gave up waiting for offer.")
+        self.connection_state_changed.emit(ConnectionState.FAILED)
+    
     def fetch_ice_servers(self):
         try:
             response = requests.post("https://getturncredentials-qaf2yvcrrq-uc.a.run.app", timeout = 10)
@@ -131,7 +153,6 @@ class WebRTCWorker(QObject):
                         credential=server.get("credential")
                     )
                 )
-            # ice_servers[0] = RTCIceServer(urls=["stun:stun.l.google.com:19302"])
             return ice_servers
         except Exception as e:
             print(f"❌ Failed to fetch TURN credentials: {e}")
@@ -157,18 +178,7 @@ class WebRTCWorker(QObject):
         except Exception as e:
             print(f"[WebRTC] Answer error: {e}")
 
-    async def consume_video(self, track: MediaStreamTrack):
-        print("[WebRTC] Starting video track consumption")
-        self.gst_pipeline.build_pipeline()
-        while self.running:
-            try:
-                frame: VideoFrame = await track.recv()
-                img = frame.to_ndarray(format="rgb24")
-                self.gst_pipeline.push_frame(img.tobytes(), frame.width, frame.height)
-            except Exception as e:
-                print(f"[WebRTC] Video track ended: {e}")
-                break
-     
+    
     async def handle_track(self, track: MediaStreamTrack):
         print("Inside handle track")
         self.track = track
