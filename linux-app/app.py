@@ -1,30 +1,31 @@
 #!/usr/bin/env python3
 import sys
 import requests
-import asyncio
-import time
-import random
-from PyQt5.QtWidgets import (
+from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QPushButton, QFrame, QLabel, QSizePolicy, QSpacerItem,
-    QSystemTrayIcon, QMenu, QAction
+    QSystemTrayIcon, QMenu
 )
-from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
-from PyQt5.QtGui import QIcon
-from webrtc_pipeline import WebRTCWorker
+from PySide6.QtCore import Qt, QTimer, QThread, Signal
+from PySide6.QtGui import QFont, QIcon, QAction
+from webrtc_pipeline import WebRTCWorker, ConnectionState
 
 class PixelStreamerApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.code = None
-        self.preview_frame = None
+        self.worker = None
+        self.poll_timer = None
         self.initUI()
 
     def initUI(self):
+        with open("./assets/style.qss", "r") as f:
+            self.setStyleSheet(f.read())
+        
         self.setWindowTitle("PixelStreamer")
-        self.resize(2560, 1600)
-        self.setStyleSheet("background-color: #18181a;")
-
+        self.setGeometry(100, 100, 256, 160)
+        self.font = QFont("Courier New")
+        
         central_widget = QWidget()
         main_layout = QHBoxLayout()
         central_widget.setLayout(main_layout)
@@ -33,71 +34,47 @@ class PixelStreamerApp(QMainWindow):
 
         sidebar = QWidget()
         sidebar_layout = QVBoxLayout()
-        sidebar_layout.setContentsMargins(50, 185, 50, 100)
-        sidebar_layout.setSpacing(100)
+        sidebar_layout.setContentsMargins(20, 40, 20, 20)
+        sidebar_layout.setSpacing(30)
         sidebar.setLayout(sidebar_layout)
-        sidebar.setFixedWidth(800)
-        sidebar.setStyleSheet("background-color: transparent;")
-
+        
+        title = QLabel("PixelStreamer")
+        title.setFont(self.font)
+        sidebar_layout.addWidget(title)
+        title.setObjectName("titleLabel")
+        
         self.buttons = ["Generate Code", "Hide Into Tray", "Webcam", "Microphone"]
         self.button_widgets = {}
 
         for label in self.buttons:
             button = QPushButton(label)
-            button.setStyleSheet("""
-                QPushButton {
-                    background-color: #4876ff;
-                    color: white;
-                    border: none;
-                    border-radius: 50px;
-                    font-size: 80px;
-                    padding: 50px;
-                }
-                QPushButton:hover {
-                    background-color: #5A7EFF;
-                }
-            """)
+            button.setFont(self.font)
+            button.setCursor(Qt.PointingHandCursor)
             button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            button.setFixedWidth(700)
             button.clicked.connect(lambda checked, b=button: self.on_button_click(b))
             sidebar_layout.addWidget(button)
             self.button_widgets[label] = button
 
         self.connection_status = QLabel("Connection: Not Connected")
-        self.connection_status.setStyleSheet("""
-            QLabel {
-                color: #E74C3C;
-                font-size: 50px;
-                font-weight: bold;
-            }
-        """)
+        self.connection_status.setFont(self.font)
+        self.connection_status.setObjectName("connectionStatus")
         sidebar_layout.addWidget(self.connection_status)
 
         sidebar_layout.addSpacerItem(QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding))
 
         preview_container = QVBoxLayout()
         preview_container.setContentsMargins(20, 40, 40, 40)
-        preview_container.setSpacing(10)
+        preview_container.setSpacing(20)
 
         preview_label = QLabel("Preview")
-        preview_label.setStyleSheet("""
-            QLabel {
-                color: white;
-                font-size: 100px;
-                font-weight: bold;
-            }
-        """)
+        preview_label.setFont(self.font)
         preview_label.setAlignment(Qt.AlignLeft)
+        preview_label.setObjectName("previewLabel")
 
         self.preview_frame = QWidget()
-        self.preview_frame.setStyleSheet("""
-            QWidget {
-                background-color: #777777;
-                border-radius: 50px;
-            }
-        """)
-        self.preview_frame.setMinimumSize(600, 400)
         self.preview_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.preview_frame.setObjectName("previewFrame")
+        preview_label.setBuddy(self.preview_frame)
 
         # Create a layout for the preview frame to hold the GStreamer video widget
         self.preview_layout = QVBoxLayout()
@@ -148,7 +125,9 @@ class PixelStreamerApp(QMainWindow):
         button.setText(self.code)
         button.setEnabled(True)
         if self.code != "Error":
-            self.poll_for_offer()
+            self.worker = WebRTCWorker(code = self.code, widget_win_id = int(self.preview_frame.winId()))
+            self.worker.connection_state_changed.connect(self.update_connection_status)
+            self.worker.start()
 
     def request_code(self):
         try:
@@ -159,76 +138,28 @@ class PixelStreamerApp(QMainWindow):
             print(f"Failed to generate code: {e}")
             return "Error"
 
-    def poll_for_offer(self):
-        self.poll_attempt = 0
-        self.max_attempts = 30
-        self.base_delay = 1.0
-        self.max_delay = 30.0
-        self.poll_timer = QTimer()
-        self.poll_timer.setSingleShot(True)
-
-        def poll():
-            print(f"[Polling] Attempt {self.poll_attempt + 1}")
-            try:
-                response = requests.post("https://checkoffer-qaf2yvcrrq-uc.a.run.app", json={"code": self.code}, timeout=5)
-                if response.status_code == 200:
-                    print("✅ Offer received! Starting connection thread...")
-                    win_id = int(self.preview_frame.winId())
-                    self.worker = WebRTCWorker(code=self.code, widget_win_id=win_id, offer=response.json()["offer"])
-                    self.worker.connection_state_changed.connect(self.update_connection_status)
-                    self.worker.start()
-                    return
-                elif response.status_code == 204:
-                    print("🕐 Not ready yet...")
-                else:
-                    print(f"⚠️ Unexpected status: {response.status_code}")
-            except Exception as e:
-                print(f"❌ Poll error: {e}")
-
-            self.poll_attempt += 1
-            if self.poll_attempt >= self.max_attempts:
-                print("⛔ Gave up waiting for offer.")
-                return
-
-            delay = random.uniform(0, min(self.max_delay, self.base_delay * (2 ** self.poll_attempt)))
-            print(f"🔁 Retrying in {delay:.2f} seconds...")
-            self.poll_timer.start(int(delay * 1000))
-
-        self.poll_timer.timeout.connect(poll)
-        poll()
-
     def update_connection_status(self, state):
-        print(f"Connection state update: {state}")
-        if state == "connected":
-            self.connection_status.setText("Connection: Connected")
-            self.connection_status.setStyleSheet("""
-                QLabel {
-                    color: #2ECC71;
-                    font-size: 50px;
-                    font-weight: bold;
-                }
-            """)
-        elif state == "connecting":
-            self.connection_status.setText("Connection: Connecting...")
-            self.connection_status.setStyleSheet("""
-                QLabel {
-                    color: #F39C12;
-                    font-size: 50px;
-                    font-weight: bold;
-                }
-            """)
-        elif state == "failed" or state == "disconnected" or state == "closed":
-            self.connection_status.setText(f"Connection: {state.capitalize()}")
-            self.connection_status.setStyleSheet("""
-                QLabel {
-                    color: #E74C3C;
-                    font-size: 50px;
-                    font-weight: bold;
-                }
-            """)
+        color_map = {
+            ConnectionState.CONNECTED: "#2ECC71",
+            ConnectionState.CONNECTING: "#F39C12",
+            ConnectionState.DISCONNECTED: "#E74C3C",
+            ConnectionState.FAILED: "#E74C3C",
+        }
+        print(f"Connection state update: {state.value}")
+        match state:
+            case ConnectionState.CONNECTING:
+                self.connection_status.setText("Connection: Connecting...")
+            case ConnectionState.CONNECTED | ConnectionState.FAILED | ConnectionState.DISCONNECTED:
+                self.connection_status.setText(f"Connection: {state.value.capitalize()}")
+
+        self.connection_status.setStyleSheet(f"color: {color_map[state]}")
 
     def handle_code_deletion(self, button):
         self.delete_code()
+        if self.poll_timer:
+            self.poll_timer.stop()
+        if self.worker:
+            self.worker.stop()
         button.setText(self.buttons[0])
         button.setEnabled(True)
 
@@ -251,8 +182,8 @@ def main():
     app = QApplication(sys.argv)
     window = PixelStreamerApp()
     window.show()
-    sys.exit(app.exec_())
-
+    
+    sys.exit(app.exec())
 
 if __name__ == "__main__":
     main()

@@ -23,30 +23,15 @@ export default function AudioVolumeIndicator({ isEnabled, mediaStream }: { isEna
     };
   }, [isEnabled, mediaStream]);
 
-  useEffect(() => {
-    console.log(`Audio level is ${audioLevel}`);
-  }, [audioLevel])
-
   if (!isEnabled) return null;
 
   return (
     <div
-      style={{
-        width: "100%",
-        display: "flex",
-        alignItems: "center",
-        gap: "0.75rem",
-        padding: "0 1.25rem 1rem",
-      }}
+      className="w-full flex items-center justify-center px-5 my-8"
     >
       <Icon icon="mic" />
       <div
-        style={{
-          flex: "1",
-          background: "#fff",
-          height: "5px",
-          borderRadius: "4px",
-        }}
+        className="relative flex-1 h-2 bg-gray-200 rounded-full overflow-hidden"
       >
         <div
           style={{

@@ -12,7 +12,7 @@ const icons = {
     resolution: { sd: "sd", hd: "hd", "4k": "4k" } as const,
     microphone: { on: "mic", off: "mic_off", error: "mic_alert" } as const,
     video: { on: "videocam", off: "videocam_off", error: "videocam_alert" } as const,
-    connection: { connecting: "cloud_sync", connected: "cloud_done", disconnected: "cloud_off", error: "cloud_error" } as const,
+    connection: { connecting: "cloud_sync", connected: "cloud_done", disconnected: "cloud_off", error: "cloud_alert" } as const,
 };
 
 export default function StreamPage() {
@@ -49,7 +49,7 @@ export default function StreamPage() {
     const [connectionStatus, setConnectionStatus] = useState<ConnectionState>("connecting");
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-    // TODO: setupWebRTC, renegotiateConnection, toggleStream, handBack, toggleVideo, toggleMic, handleCameraFlip
+    // TODO: setupWebRTC, renegotiateConnection
     
     useEffect(() => {
         if (!isLoadingMedia && media) {
@@ -68,7 +68,7 @@ export default function StreamPage() {
 
     const startStream = () => {
         let peerConnection: RTCPeerConnection;
-        let sdpOffer: RTCSessionDescription | null = null;
+        let sdpOffer: RTCSessionDescription | null;
         let backoffDelay = 2000;
     
         const waitForIceGathering = () =>
@@ -97,8 +97,12 @@ export default function StreamPage() {
 
             const config: RTCConfiguration = {
                 iceServers: iceServers,
+                bundlePolicy: "max-bundle",
             };
             
+            if (peerConnectionRef.current) {
+                peerConnectionRef.current.close();
+            }
             peerConnection = new RTCPeerConnection(config);
             peerConnectionRef.current = peerConnection;
 
@@ -133,6 +137,10 @@ export default function StreamPage() {
             peerConnection.oniceconnectionstatechange = () => {
                 console.log("ICE Connection State:", peerConnection.iceConnectionState);
             };
+
+            peerConnection.onicegatheringstatechange = () => {
+                console.log("ICE Gathering State:", peerConnection.iceGatheringState);
+            };
             
             peerConnection.onicecandidateerror = (error) => {
                 console.error("ICE Candidate error:", error);
@@ -148,7 +156,9 @@ export default function StreamPage() {
             await waitForIceGathering();
     
             sdpOffer = peerConnection.localDescription;
-            console.log("SDP offer created:", sdpOffer);
+            if (!sdpOffer) {
+                console.warn("SDP offer is null");
+            }
         };
     
         const submitOffer = async () => {
@@ -171,17 +181,38 @@ export default function StreamPage() {
                 }),
             });
 
-            console.log("Offer submitted:", sdpOffer);
+            console.log("Offer submitted:", JSON.stringify(sdpOffer));
             console.log("Response:", response);
     
             if (!response.ok) {
                 throw new Error("Failed to submit offer");
+                setConnectionStatus("disconnected");
+                setIsStreamOn(false);
             } else {
                 console.log("✅ Offer submitted successfully");
             }
 
             peerConnection.onconnectionstatechange = () => {
                 console.log("PeerConnection state:", peerConnection.connectionState);
+                if (peerConnection.connectionState === "connected") {
+                    setConnectionStatus("connected");
+                    setIsStreamOn(true);
+                } else if (peerConnection.connectionState === "disconnected") {
+                    setConnectionStatus("disconnected");
+                    setIsStreamOn(false);
+                }
+                else if (peerConnection.connectionState === "failed") {
+                    setConnectionStatus("error");
+                    setErrorMessage("PeerConnection failed");
+                    setIsStreamOn(false);
+                }
+                else if (peerConnection.connectionState === "closed") {
+                    setConnectionStatus("disconnected");
+                    setIsStreamOn(false);
+                }
+                else {
+                    setConnectionStatus("connecting");
+                }
             };
 
 
@@ -189,10 +220,10 @@ export default function StreamPage() {
     
         const addAnswer = async (answer: string) => {
             const parsed = JSON.parse(answer);
-            if (!peerConnection.currentRemoteDescription) {
+            if (!peerConnection.remoteDescription) {
                 await peerConnection.setRemoteDescription(parsed);
                 console.log("✅ Remote SDP answer set");
-                setConnectionStatus("connected");
+                setConnectionStatus("connecting");
                 setIsStreamOn(true);
             }
         };
