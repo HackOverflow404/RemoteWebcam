@@ -48,6 +48,7 @@ class WebRTCWorker(QObject):
         if not self.offer:
             self.connection_state_changed.emit(ConnectionState.FAILED)
             return
+        
         ice_servers = self.fetch_ice_servers()
         print("[TURN] Using ICE servers:", ice_servers)
         config = RTCConfiguration(iceServers = ice_servers)
