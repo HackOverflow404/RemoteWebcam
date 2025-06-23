@@ -64,9 +64,7 @@ export default function CodeInput({ code, setCode }: CodeInputProps) {
                     onKeyDown={(e) => handleKeyDown(index, e)}
                     onChange={() => {}}
                     aria-label={`Code input ${index + 1}`}
-                    className="w-15 h-25 bg-gray-400 rounded-2xl
-                                         text-center text-black text-4xl font-bold
-                                         focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-15 h-25 bg-gray-400 rounded-2xl text-center text-black text-4xl font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
             ))}
         </div>
