@@ -1,4 +1,6 @@
-module.exports = {
+import type { NextConfig } from 'next';
+
+const config: NextConfig = {
   async headers() {
     return [
       {
@@ -35,6 +37,9 @@ module.exports = {
           },
         ],
       },
-    ]
+    ];
   },
-}
+  output: 'export',
+};
+
+export default config;
