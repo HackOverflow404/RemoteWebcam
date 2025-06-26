@@ -5,8 +5,7 @@
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build",
-    "start": "next start",
-    "deploy": "npm run build && firebase deploy"
+    "start": "next start"
   },
   "dependencies": {
     "@stream-io/video-react-sdk": "^1.12.11",
