@@ -38,7 +38,7 @@ export default function useWebRTCStream({
     const [error, setError] = useState<string | null>(null);
     const [connectionStatus, setConnectionStatus] = useState<ConnectionState>("connecting");
 
-    // Helper for cleaning up intervals and PeerConnection
+    // --- Cleanup ---
     const cleanup = useCallback(() => {
         pollingActiveRef.current = false;
         if (statsIntervalRef.current) {
@@ -56,10 +56,9 @@ export default function useWebRTCStream({
         setConnectionStatus("disconnected");
     }, [videoRef]);
 
-    // Main startStream function (memoized)
+    // --- Stable startStream handler ---
     const startStream = useCallback(() => {
         pollingActiveRef.current = true;
-
         let peerConnection: RTCPeerConnection;
         let sdpOffer: RTCSessionDescription | null;
 
@@ -100,13 +99,11 @@ export default function useWebRTCStream({
                 setError("No media stream available");
                 return;
             }
-
             media.getTracks().forEach(track => {
                 const sender = peerConnection.addTrack(track, media);
                 const transceiver = peerConnection.getTransceivers().find(t => t.sender === sender);
                 if (transceiver) transceiver.direction = "sendonly";
             });
-
             // Debugging info
             peerConnection.getTransceivers().forEach((t, i) => {
                 console.log(`[Transceiver ${i}] kind: ${t.sender.track?.kind}, direction: ${t.direction}`);
@@ -210,6 +207,7 @@ export default function useWebRTCStream({
 
             if (response.ok) {
                 const data = await response.json();
+                console.log("Received answer:", data);
                 if (data.answer) {
                     await addAnswer(JSON.stringify(data.answer));
                     if (!statsIntervalRef.current) {
@@ -260,14 +258,37 @@ export default function useWebRTCStream({
 
         // Clean up when component unmounts or stream is stopped
         return cleanup;
-    }, [media, sessionCode, isMicOn, isVidOn, isFrontCamera, resolution, fps, exposure, cleanup]);
+    // Only depends on the latest props, and cleanup is always stable
+    }, [
+        media, sessionCode, isMicOn, isVidOn,
+        isFrontCamera, resolution, fps, exposure, cleanup
+    ]);
 
-    // Stop stream function (memoized)
+    // --- Replace track is always stable ---
+    const replaceTrack = useCallback(async (kind: "video" | "audio", newTrack: MediaStreamTrack | null) => {
+        const pc = peerConnectionRef.current;
+        if (!pc) {
+            console.warn("No PeerConnection to replace track on");
+            return;
+        }
+        const sender = pc.getSenders().find(s => s.track && s.track.kind === kind);
+        if (sender) {
+            await sender.replaceTrack(newTrack);
+            console.log(`[WebRTC] ${kind} track replaced`);
+        } else if (newTrack) {
+            pc.addTrack(newTrack, media!);
+            console.log(`[WebRTC] ${kind} track added (no existing sender)`);
+        } else {
+            console.warn(`[WebRTC] No ${kind} sender and no track to add`);
+        }
+    }, [media]);
+
+    // --- Stable stopStream ---
     const stopStream = useCallback(() => {
         cleanup();
     }, [cleanup]);
 
-    // Toggle function (memoized)
+    // --- Stable toggleStream ---
     const toggleStream = useCallback(() => {
         if (isStreamOn) {
             stopStream();
@@ -277,9 +298,9 @@ export default function useWebRTCStream({
             startMedia();
             startStream();
         }
-    }, [isStreamOn, stopStream, setConnectionStatus, startMedia, stopMedia, startStream]);
+    }, [isStreamOn, stopStream, stopMedia, startMedia, startStream]);
 
-    // Effect: clean up on unmount
+    // --- Only once on mount/unmount ---
     useEffect(() => {
         return cleanup;
     }, [cleanup]);
@@ -288,9 +309,9 @@ export default function useWebRTCStream({
         isStreamOn,
         connectionStatus,
         error,
+        replaceTrack,
         startStream,
         stopStream,
         toggleStream,
-        setError,
     };
 }

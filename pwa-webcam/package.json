@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "deploy": "next build"
   },
   "dependencies": {
     "@stream-io/video-react-sdk": "^1.12.11",

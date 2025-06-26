@@ -1,11 +1,12 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import React, { useState, useCallback, useRef, useEffect } from "react";
+import React, { useState, useCallback, useEffect, Suspense, useMemo } from "react";
 const AudioVolumeIndicator = React.lazy(() => import("@/components/AudioVolumeIndicator"));
 import useMediaStream from "@/components/useMediaStream";
-import useWebRTCStream from "@/components/useWebRTCStream";
+import useWebRTCStream from "@/components/useWebRTCStream"; 
 
+// --- Icon mappings ---
 const icons = {
     fps: { "30": "30fps", "60": "60fps" } as const,
     resolution: { sd: "sd", hd: "hd", "4k": "4k" } as const,
@@ -14,17 +15,22 @@ const icons = {
     connection: { connecting: "cloud_sync", connected: "cloud_done", disconnected: "cloud_off", error: "cloud_alert" } as const,
 };
 
-function StreamPage() {
+function StreamPage({ sessionCodeParam, initialWebcamParam = false, initialMicParam = false }: {
+    sessionCodeParam: string;
+    initialWebcamParam?: boolean;
+    initialMicParam?: boolean;
+}) {
     const router = useRouter();
-    const searchParams = useSearchParams();
-    const sessionCode = searchParams.get("code") || "";
-    const initialWebcam = searchParams.get("webcam") === "true";
-    const initialMic = searchParams.get("mic") === "true";
-    
+
+    const sessionCode = sessionCodeParam;
+    const initialWebcam = initialWebcamParam;
+    const initialMic = initialMicParam;
+
     const [fps, setFps] = useState<"30" | "60">("60");
     const [resolution, setResolution] = useState<"sd" | "hd" | "4k">("hd");
     const [exposure, setExposure] = useState(0);
 
+    // -- Media Stream Hook --
     const {
         videoRef,
         stream: media,
@@ -38,6 +44,7 @@ function StreamPage() {
         isFrontCamera,
         loading: isLoadingMedia,
         error: mediaStreamError,
+        updateConstraints,
     } = useMediaStream({
         initialAudio: initialMic,
         initialVideo: initialWebcam,
@@ -45,17 +52,19 @@ function StreamPage() {
         resolution,
     });
     
+    // -- WebRTC Hook --
     const {
         startStream,
         stopStream,
         toggleStream,
+        replaceTrack,
         isStreamOn,
         connectionStatus,
         error: RTCStreamError,
     } = useWebRTCStream({
         videoRef,
         media,
-        sessionCode,
+        sessionCode: sessionCode,
         isMicOn,
         isVidOn,
         isFrontCamera,
@@ -65,30 +74,60 @@ function StreamPage() {
         startMedia,
         stopMedia,
     });
-    
-    const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-    // TODO: setupWebRTC, renegotiateConnection
-    
+    // --- Combine errors for prioritized display ---
+    const allErrors = [mediaStreamError, RTCStreamError].filter(Boolean);
+    const errorMessage = allErrors[0] || null;
+
+    // --- Handle initial media and stream startup ---
     useEffect(() => {
-        startMedia();
-        if (!isLoadingMedia && media) {
-            startStream();
+        if (sessionCode) {
+            startMedia();
         }
-        
-        return (() => {
-            stopStream();
-            stopMedia()
-        })
-    }, []);
-    
+        return () => {
+            stopMedia();
+        };
+    }, [sessionCode]);
+
     useEffect(() => {
-        setErrorMessage(mediaStreamError)
-    }, [mediaStreamError]);
-    
+        // Only (re)start stream when media is available and not loading
+        if (media && !isLoadingMedia && isStreamOn) {
+            startStream();
+            return () => stopStream();
+        }
+        // eslint-disable-next-line
+    }, [media, isLoadingMedia, isStreamOn]);
+
+    // --- Reactively update WebRTC track if media changes (e.g., after settings update) ---
     useEffect(() => {
-        setErrorMessage(RTCStreamError)
-    }, [RTCStreamError]);
+        // Use this effect if your WebRTC hook supports dynamic track replacement
+        if (isStreamOn && media && replaceTrack) {
+            // Replace both audio and video tracks
+            const videoTrack = media.getVideoTracks()[0];
+            const audioTrack = media.getAudioTracks()[0];
+            if (videoTrack) replaceTrack("video", videoTrack);
+            if (audioTrack) replaceTrack("audio", audioTrack);
+        }
+    }, [isStreamOn, media]);
+
+    // --- Unified video settings handler ---
+    const handleVideoSettings = useCallback((newFps?: "30" | "60", newRes?: "sd" | "hd" | "4k", newExposure?: number) => {
+        if (newFps) setFps(newFps);
+        if (newRes) setResolution(newRes);
+        if (typeof newExposure === "number") setExposure(newExposure);
+
+        // Call a unified media constraints update if available (must implement in your hook)
+        if (updateConstraints) {
+            updateConstraints({
+                fps: newFps || fps,
+                resolution: newRes || resolution,
+                exposure: typeof newExposure === "number" ? newExposure : exposure,
+            });
+        } else {
+            // fallback: toggle video to trigger effect
+            if (isVidOn && media) setTimeout(toggleVideo, 100);
+        }
+    }, [fps, resolution, exposure, updateConstraints, isVidOn, media, toggleVideo]);
 
     const handleBack = useCallback(() => {
         stopStream();
@@ -98,10 +137,11 @@ function StreamPage() {
     return (
         <section className="relative w-screen h-screen">
             {isLoadingMedia && (
-                <div className="absolute inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50">
+                <div className="absolute inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 pointer-events-none">
                     <div className="text-white text-2xl">Loading Media...</div>
                 </div>
             )}
+
             <video
                 ref={videoRef}
                 autoPlay
@@ -117,7 +157,7 @@ function StreamPage() {
                 <div className="absolute top-24 left-0 right-0 flex justify-center animate-pulse z-20">
                     <div className="bg-red-500 text-white px-4 py-2 rounded-md flex items-center">
                         <span>{errorMessage}</span>
-                        <button className="ml-2" onClick={() => setErrorMessage(null)}>
+                        <button className="ml-2" onClick={() => {/* Clear all errors if needed */}}>
                             ✕
                         </button>
                     </div>
@@ -134,6 +174,7 @@ function StreamPage() {
                     Code: {sessionCode}
                 </div>
             )}
+
             {/* Overlay setting buttons */}
             <div className="flex flex-col items-center inset-0 z-1">
                 {/* Top settings */}
@@ -148,13 +189,7 @@ function StreamPage() {
                     </button>
                     {/* FPS Button */}
                     <button
-                        onClick={() => {
-                            setFps((prev) => (prev === "30" ? "60" : "30"));
-                            if (isVidOn && media) {
-                                // Restart video with new FPS
-                                setTimeout(toggleVideo, 100);
-                            }
-                        }}
+                        onClick={() => handleVideoSettings(fps === "30" ? "60" : "30")}
                         className="p-3"
                         aria-label="Toggle FPS"
                     >
@@ -169,7 +204,7 @@ function StreamPage() {
                     </button>
                     {/* Exposure Button */}
                     <button
-                        onClick={() => setExposure((prev) => (prev + 1) % 3)}
+                        onClick={() => handleVideoSettings(undefined, undefined, (exposure + 1) % 3)}
                         className="p-3"
                         aria-label="Adjust Exposure"
                     >
@@ -177,15 +212,7 @@ function StreamPage() {
                     </button>
                     {/* Resolution Button */}
                     <button
-                        onClick={() => {
-                            setResolution((prev) =>
-                                prev === "sd" ? "hd" : prev === "hd" ? "4k" : "sd"
-                            );
-                            if (isVidOn && media) {
-                                // Restart video with new resolution
-                                setTimeout(toggleVideo, 100);
-                            }
-                        }}
+                        onClick={() => handleVideoSettings(undefined, resolution === "sd" ? "hd" : resolution === "hd" ? "4k" : "sd")}
                         className="p-3"
                         aria-label="Toggle Resolution"
                     >
@@ -196,16 +223,16 @@ function StreamPage() {
                 <footer className="flex flex-col fixed bottom-0 w-screen py-10 justify-evenly z-1">
                     {/* Noise Level Indicator */}
                     {isMicOn === "on" && media && media.getAudioTracks().length > 0 && (
-                            <React.Suspense fallback={<div>Loading Mic Volume...</div>}>
-                                <AudioVolumeIndicator isEnabled={true} mediaStream={media} />
-                            </React.Suspense>
-                        )}    
+                        <React.Suspense fallback={<div>Loading Mic Volume...</div>}>
+                            <AudioVolumeIndicator isEnabled={true} mediaStream={media} />
+                        </React.Suspense>
+                    )}    
                     <div className="flex flex-row w-full justify-evenly">
                         {/* Mic Button */}
                         <button
                             onClick={toggleMic}
                             className="p-3 w-15 h-15 flex items-center justify-center"
-                            aria-label={isMicOn ? "Mute Microphone" : "Unmute Microphone"}>
+                            aria-label={isMicOn === "on" ? "Mute Microphone" : "Unmute Microphone"}>
                             <span className="material-symbols-outlined" style={{fontSize: "40px"}}>
                                 {icons.microphone[isMicOn]}
                             </span>
@@ -225,7 +252,7 @@ function StreamPage() {
                         <button
                             onClick={toggleVideo}
                             className="p-3 w-15 h-15 flex items-center justify-center"
-                            aria-label={isVidOn ? "Stop Video" : "Start Video"}>
+                            aria-label={isVidOn === "on" ? "Stop Video" : "Start Video"}>
                             <span className="material-symbols-outlined" style={{fontSize: "40px"}}>
                                 {icons.video[isVidOn]}
                             </span>
@@ -237,12 +264,31 @@ function StreamPage() {
     );
 }
 
-import { Suspense } from "react";
-
 export default function Page() {
-  return (
-    <Suspense fallback={<div>Loading stream...</div>}>
-      <StreamPage />
-    </Suspense>
-  );
+    const searchParams = useSearchParams();
+
+    // Memoize the extracted values to prevent unnecessary rerenders
+    const { code, webcam, mic, componentKey } = useMemo(() => {
+        const extractedCode = searchParams.get("code") || "";
+        const extractedWebcam = searchParams.get("webcam") === "true";
+        const extractedMic = searchParams.get("mic") === "true";
+        
+        return {
+            code: extractedCode,
+            webcam: extractedWebcam,
+            mic: extractedMic,
+            componentKey: `${extractedCode}-${extractedWebcam}-${extractedMic}`
+        };
+    }, [searchParams]);
+
+    return (
+        <Suspense fallback={<div>Loading stream...</div>}>
+            <StreamPage
+                key={componentKey}
+                sessionCodeParam={code}
+                initialWebcamParam={webcam}
+                initialMicParam={mic}
+            />
+        </Suspense>
+    );
 }
