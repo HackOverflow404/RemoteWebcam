@@ -50,7 +50,7 @@ export default function Home() {
 
             // Navigate to the stream page with parameters
             console.log("Validated code, routing to stream");
-            router.push(`/stream?code=${joinedCode}&webcam=${streams.webcam}&mic=${streams.mic}`);
+            router.push(`/stream?webcam=${streams.webcam}&mic=${streams.mic}&code=${joinedCode}`);
             
         } catch (error: any) {
             console.error("Error validating code:", error);
