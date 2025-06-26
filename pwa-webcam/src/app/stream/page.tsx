@@ -4,7 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import React, { useState, useCallback, useEffect, Suspense, useMemo } from "react";
 const AudioVolumeIndicator = React.lazy(() => import("@/components/AudioVolumeIndicator"));
 import useMediaStream from "@/components/useMediaStream";
-import useWebRTCStream from "@/components/useWebRTCStream"; 
+import useWebRTCStream from "@/components/useWebRTCStream";
 
 // --- Icon mappings ---
 const icons = {
@@ -15,16 +15,27 @@ const icons = {
     connection: { connecting: "cloud_sync", connected: "cloud_done", disconnected: "cloud_off", error: "cloud_alert" } as const,
 };
 
-function StreamPage({ sessionCodeParam, initialWebcamParam = false, initialMicParam = false }: {
-    sessionCodeParam: string;
-    initialWebcamParam?: boolean;
-    initialMicParam?: boolean;
-}) {
+function StreamPage() {
     const router = useRouter();
+    const searchParams = useSearchParams();
 
-    const sessionCode = sessionCodeParam;
-    const initialWebcam = initialWebcamParam;
-    const initialMic = initialMicParam;
+    // Memoize the extracted values to prevent unnecessary rerenders
+    const { code, webcam, mic, componentKey } = useMemo(() => {
+        const extractedCode = searchParams.get("code") || "";
+        const extractedWebcam = searchParams.get("webcam") === "true";
+        const extractedMic = searchParams.get("mic") === "true";
+        
+        return {
+            code: extractedCode,
+            webcam: extractedWebcam,
+            mic: extractedMic,
+            componentKey: `${extractedCode}-${extractedWebcam}-${extractedMic}`
+        };
+    }, [searchParams]);
+
+    const sessionCode = code;
+    const initialWebcam = webcam;
+    const initialMic = mic;
 
     const [fps, setFps] = useState<"30" | "60">("60");
     const [resolution, setResolution] = useState<"sd" | "hd" | "4k">("hd");
@@ -265,30 +276,9 @@ function StreamPage({ sessionCodeParam, initialWebcamParam = false, initialMicPa
 }
 
 export default function Page() {
-    const searchParams = useSearchParams();
-
-    // Memoize the extracted values to prevent unnecessary rerenders
-    const { code, webcam, mic, componentKey } = useMemo(() => {
-        const extractedCode = searchParams.get("code") || "";
-        const extractedWebcam = searchParams.get("webcam") === "true";
-        const extractedMic = searchParams.get("mic") === "true";
-        
-        return {
-            code: extractedCode,
-            webcam: extractedWebcam,
-            mic: extractedMic,
-            componentKey: `${extractedCode}-${extractedWebcam}-${extractedMic}`
-        };
-    }, [searchParams]);
-
     return (
         <Suspense fallback={<div>Loading stream...</div>}>
-            <StreamPage
-                key={componentKey}
-                sessionCodeParam={code}
-                initialWebcamParam={webcam}
-                initialMicParam={mic}
-            />
+            <StreamPage />
         </Suspense>
     );
 }
