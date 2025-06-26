@@ -82,21 +82,31 @@ class WebRTCWorker(QObject):
         async def on_iceconnchange():
             print("[WebRTC] ICE connection state:", self.pc.iceConnectionState)
         
+        # Prepare a Future to be resolved when ICE gathering is done
+        self.ice_complete = asyncio.get_event_loop().create_future()
+
         @self.pc.on("icegatheringstatechange")
         async def on_icegatheringstatechange():
             print("[WebRTC] ICE gathering state:", self.pc.iceGatheringState)
             if self.pc.iceGatheringState == "complete":
-                print("[WebRTC] ICE gathering complete")
-                self.send_answer(self.pc.localDescription)
+                if not self.ice_complete.done():
+                    self.ice_complete.set_result(True)
 
-        print("[WebRTC] Setting remote SDP offer:\n", self.offer)
-        print("\n\n\n\n\n\n\n\n")
-        
+        # Set the remote SDP
         await self.pc.setRemoteDescription(RTCSessionDescription(**self.offer))
+
+        # Create the answer
         answer = await self.pc.createAnswer()
         print("[WebRTC] Created answer:", answer)
+
+        # Start ICE gathering by setting the local description
         await self.pc.setLocalDescription(answer)
-        print("[WebRTC] Local SDP answer:\n", self.pc.localDescription.sdp)
+
+        # Now wait for ICE gathering to complete
+        await self.ice_complete
+
+        # Send the fully-formed answer SDP (includes ICE candidates)
+        self.send_answer(self.pc.localDescription)
 
     async def poll_for_offer(self):
         self.poll_attempt = 0
@@ -160,6 +170,7 @@ class WebRTCWorker(QObject):
             return []
     
     def send_answer(self, sdp):
+        print(sdp)
         try:
             res = requests.post(
                 "https://submitanswer-qaf2yvcrrq-uc.a.run.app",
