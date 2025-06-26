@@ -4,8 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import React, { useState, useCallback, useRef, useEffect } from "react";
 const AudioVolumeIndicator = React.lazy(() => import("@/components/AudioVolumeIndicator"));
 import useMediaStream from "@/components/useMediaStream";
-
-type ConnectionState = "connecting" | "connected" | "disconnected" | "error";
+import useWebRTCStream from "@/components/useWebRTCStream";
 
 const icons = {
     fps: { "30": "30fps", "60": "60fps" } as const,
@@ -21,6 +20,10 @@ function StreamPage() {
     const sessionCode = searchParams.get("code") || "";
     const initialWebcam = searchParams.get("webcam") === "true";
     const initialMic = searchParams.get("mic") === "true";
+    
+    const [fps, setFps] = useState<"30" | "60">("60");
+    const [resolution, setResolution] = useState<"sd" | "hd" | "4k">("hd");
+    const [exposure, setExposure] = useState(0);
 
     const {
         videoRef,
@@ -38,20 +41,37 @@ function StreamPage() {
     } = useMediaStream({
         initialAudio: initialMic,
         initialVideo: initialWebcam,
+        fps,
+        resolution,
     });
     
-    const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
-
-    const [fps, setFps] = useState<"30" | "60">("60");
-    const [resolution, setResolution] = useState<"sd" | "hd" | "4k">("hd");
-    const [exposure, setExposure] = useState(0);
-    const [isStreamOn, setIsStreamOn] = useState(true);
-    const [connectionStatus, setConnectionStatus] = useState<ConnectionState>("connecting");
+    const {
+        startStream,
+        stopStream,
+        toggleStream,
+        isStreamOn,
+        connectionStatus,
+        error: RTCStreamError,
+    } = useWebRTCStream({
+        videoRef,
+        media,
+        sessionCode,
+        isMicOn,
+        isVidOn,
+        isFrontCamera,
+        resolution,
+        fps: Number(fps),
+        exposure,
+        startMedia,
+        stopMedia,
+    });
+    
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
     // TODO: setupWebRTC, renegotiateConnection
     
     useEffect(() => {
+        startMedia();
         if (!isLoadingMedia && media) {
             startStream();
         }
@@ -65,255 +85,10 @@ function StreamPage() {
     useEffect(() => {
         setErrorMessage(mediaStreamError)
     }, [mediaStreamError]);
-
-    const startStream = () => {
-        let peerConnection: RTCPeerConnection;
-        let sdpOffer: RTCSessionDescription | null;
-        let backoffDelay = 2000;
     
-        const waitForIceGathering = () =>
-            new Promise<void>((resolve) => {
-                if (peerConnection.iceGatheringState === "complete") return resolve();
-                const check = () => {
-                    if (peerConnection.iceGatheringState === "complete") {
-                        peerConnection.removeEventListener("icegatheringstatechange", check);
-                        resolve();
-                    }
-                };
-                peerConnection.addEventListener("icegatheringstatechange", check);
-            });
-    
-        const init = async () => {
-            const response = await fetch("https://getturncredentials-qaf2yvcrrq-uc.a.run.app", { method: "POST" });
-            if (!response.ok) {
-                console.error("Failed to fetch ICE servers");
-                setErrorMessage("Failed to fetch ICE servers");
-                return;
-            }
-            let iceServers = await response.json();
-            // iceServers[0] = {"urls": ["stun:stun.l.google.com:19302"]};
-
-            console.log("ICE servers:", iceServers);
-
-            const config: RTCConfiguration = {
-                iceServers: iceServers,
-                bundlePolicy: "max-bundle",
-            };
-            
-            if (peerConnectionRef.current) {
-                peerConnectionRef.current.close();
-            }
-            peerConnection = new RTCPeerConnection(config);
-            peerConnectionRef.current = peerConnection;
-
-            if (!media) {
-                console.error("No media stream available");
-                setErrorMessage("No media stream available");
-                return;
-            }
-    
-            media.getTracks().forEach((track) => {
-                const sender = peerConnection.addTrack(track, media);
-                const transceiver = peerConnection.getTransceivers().find(t => t.sender === sender);
-                if (transceiver) {
-                    transceiver.direction = "sendonly";
-                }
-            });
-            
-            peerConnection.getTransceivers().forEach((t, i) => {
-                console.log(`[Transceiver ${i}] kind: ${t.sender.track?.kind}, direction: ${t.direction}`);
-            });            
-            console.log("Senders:", peerConnection.getSenders());
-
-        };
-    
-        const createOffer = async () => {
-            peerConnection.onicecandidate = (event) => {
-                if (event.candidate) {
-                    console.log("ICE candidate:", event.candidate);
-                }
-            };
-
-            peerConnection.oniceconnectionstatechange = () => {
-                console.log("ICE Connection State:", peerConnection.iceConnectionState);
-            };
-
-            peerConnection.onicegatheringstatechange = () => {
-                console.log("ICE Gathering State:", peerConnection.iceGatheringState);
-            };
-            
-            peerConnection.onicecandidateerror = (error) => {
-                console.error("ICE Candidate error:", error);
-            };
-
-            if (!media || media.getTracks().length === 0) {
-                console.error("No media tracks to offer. Did startMedia() complete?");
-                return;
-            }            
-    
-            const offer = await peerConnection.createOffer();
-            await peerConnection.setLocalDescription(offer);
-            await waitForIceGathering();
-    
-            sdpOffer = peerConnection.localDescription;
-            if (!sdpOffer) {
-                console.warn("SDP offer is null");
-            }
-        };
-    
-        const submitOffer = async () => {
-            const response = await fetch("https://submitoffer-qaf2yvcrrq-uc.a.run.app", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    code: sessionCode,
-                    offer: sdpOffer,
-                    metadata: {
-                        mic: isMicOn === "on",
-                        webcam: isVidOn === "on",
-                        resolution,
-                        fps,
-                        platform: "mobile",
-                        facingMode: isFrontCamera ? "user" : "environment",
-                        exposureLevel: exposure,
-                        timestamp: Date.now(),
-                    },
-                }),
-            });
-
-            console.log("Offer submitted:", JSON.stringify(sdpOffer));
-            console.log("Response:", response);
-    
-            if (!response.ok) {
-                throw new Error("Failed to submit offer");
-                setConnectionStatus("disconnected");
-                setIsStreamOn(false);
-            } else {
-                console.log("✅ Offer submitted successfully");
-            }
-
-            peerConnection.onconnectionstatechange = () => {
-                console.log("PeerConnection state:", peerConnection.connectionState);
-                if (peerConnection.connectionState === "connected") {
-                    setConnectionStatus("connected");
-                    setIsStreamOn(true);
-                } else if (peerConnection.connectionState === "disconnected") {
-                    setConnectionStatus("disconnected");
-                    setIsStreamOn(false);
-                }
-                else if (peerConnection.connectionState === "failed") {
-                    setConnectionStatus("error");
-                    setErrorMessage("PeerConnection failed");
-                    setIsStreamOn(false);
-                }
-                else if (peerConnection.connectionState === "closed") {
-                    setConnectionStatus("disconnected");
-                    setIsStreamOn(false);
-                }
-                else {
-                    setConnectionStatus("connecting");
-                }
-            };
-
-
-        };
-    
-        const addAnswer = async (answer: string) => {
-            const parsed = JSON.parse(answer);
-            if (!peerConnection.remoteDescription) {
-                await peerConnection.setRemoteDescription(parsed);
-                console.log("✅ Remote SDP answer set");
-                setConnectionStatus("connecting");
-                setIsStreamOn(true);
-            }
-        };
-    
-        const pollForAnswer = async () => {
-            const response = await fetch("https://checkanswer-qaf2yvcrrq-uc.a.run.app", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ code: sessionCode }),
-            });
-    
-            if (response.status === 204) {
-                return false;
-            }
-            
-            if (response.ok) {
-                const data = await response.json();
-                console.log("Polling response:", data);
-                if (data.answer) {
-                    await addAnswer(JSON.stringify(data.answer));
-                    setInterval(async () => {
-                        const stats = await peerConnection.getStats();
-                        stats.forEach(report => {
-                            if (report.type === "candidate-pair" && report.state === "succeeded") {
-                                console.log("✅ ICE Connected:", report);
-                            }
-                            if (report.type === "outbound-rtp" && report.kind === "video") {
-                                console.log("📤 Video Sent:", {
-                                    packetsSent: report.packetsSent,
-                                    bytesSent: report.bytesSent,
-                                });
-                            }
-                        });
-                    }, 3000);
-                    return true;
-                }
-            }
-            return false;
-        };
-    
-        const pollTimer = async () => {
-            while (true) {
-                const gotAnswer = await pollForAnswer();
-                if (gotAnswer) break;
-    
-                await new Promise((r) => setTimeout(r, backoffDelay));
-                backoffDelay = Math.min(backoffDelay * 2, 30000);
-            }
-        };
-    
-        (async () => {
-            try {
-                await init();
-                await createOffer();
-                await submitOffer();
-                await pollTimer();
-            } catch (err) {
-                console.error("WebRTC sendonly setup error:", err);
-            }
-        })();
-    };
-
-    const stopStream = useCallback(() => {
-        if (peerConnectionRef.current) {
-            peerConnectionRef.current.close();
-            peerConnectionRef.current = null;
-        }
-    
-        if (media) {
-            stopMedia();
-        }
-    
-        if (videoRef.current) {
-            videoRef.current.srcObject = null;
-        }
-    
-        setIsStreamOn(false);
-        setConnectionStatus("disconnected");
-    }, [media, peerConnectionRef, videoRef, setIsStreamOn, setConnectionStatus]);
-
-    const toggleStream = useCallback(() => {
-        if (isStreamOn) {
-            stopStream();
-        } else {
-            setConnectionStatus("connecting");
-            stopMedia();
-            startMedia();
-            startStream();
-        }
-    }, [isStreamOn, isVidOn, isMicOn, stopStream, setConnectionStatus, startMedia, startStream]);
+    useEffect(() => {
+        setErrorMessage(RTCStreamError)
+    }, [RTCStreamError]);
 
     const handleBack = useCallback(() => {
         stopStream();

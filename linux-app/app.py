@@ -36,6 +36,7 @@ class PixelStreamerApp(QMainWindow):
         sidebar_layout = QVBoxLayout()
         sidebar_layout.setContentsMargins(20, 40, 20, 20)
         sidebar_layout.setSpacing(30)
+        sidebar_layout.setAlignment(Qt.AlignHCenter)
         sidebar.setLayout(sidebar_layout)
         
         title = QLabel("PixelStreamer")

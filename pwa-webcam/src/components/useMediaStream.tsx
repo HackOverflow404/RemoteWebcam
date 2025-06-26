@@ -6,14 +6,13 @@ interface UseMediaStreamOptions {
     initialAudio?: boolean;
     initialVideo?: boolean;
     initialFacingMode?: "user" | "environment";
-    fps?: "30" | "60";
+    fps?: "30" | "60"; // more flexible
     resolution?: "sd" | "hd" | "4k";
 }
 
 export default function useMediaStream({
     initialAudio = true,
     initialVideo = true,
-    initialFacingMode = "user",
     fps = "60",
     resolution = "hd"
 }: UseMediaStreamOptions = {}) {
@@ -21,25 +20,33 @@ export default function useMediaStream({
     const [stream, setStream] = useState<MediaStream | null>(null);
     const [isMicOn, setIsMicOn] = useState<MediaState>(initialAudio ? "on" : "off");
     const [isVidOn, setIsVidOn] = useState<MediaState>(initialVideo ? "on" : "off");
-    const [isFrontCamera, setIsFrontCamera] = useState(initialFacingMode === "user");
+    const [isFrontCamera, setIsFrontCamera] = useState(true);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
+    // --- Utility for constraints ---
     const getConstraints = useCallback(
         (videoState: MediaState = isVidOn, audioState: MediaState = isMicOn, facing = isFrontCamera): MediaStreamConstraints => ({
             video: videoState === "on"
                 ? {
-                      facingMode: facing ? "user" : "environment",
-                      frameRate: { ideal: parseInt(fps) },
-                      width: resolution === "sd" ? { ideal: 640 } : resolution === "hd" ? { ideal: 1280 } : { ideal: 3840 },
-                      height: resolution === "sd" ? { ideal: 480 } : resolution === "hd" ? { ideal: 720 } : { ideal: 2160 },
-                  }
+                    facingMode: facing ? "user" : "environment",
+                    frameRate: { ideal: Number(fps) },
+                    width: resolution === "sd" ? { ideal: 640 } : resolution === "hd" ? { ideal: 1280 } : { ideal: 3840 },
+                    height: resolution === "sd" ? { ideal: 480 } : resolution === "hd" ? { ideal: 720 } : { ideal: 2160 },
+                }
                 : false,
             audio: audioState === "on"
         }),
         [isVidOn, isMicOn, isFrontCamera, fps, resolution]
     );
 
+    // --- Clean up utility ---
+    const stopAllTracks = (s: MediaStream | null) => {
+        if (!s) return;
+        s.getTracks().forEach(track => track.stop());
+    };
+
+    // --- Initial stream setup ---
     const startInitialStream = useCallback(async () => {
         setLoading(true);
         try {
@@ -58,37 +65,43 @@ export default function useMediaStream({
         }
     }, [getConstraints]);
 
-    const replaceTrack = async (
-        type: "video" | "audio",
-        state: MediaState,
-        facingOverride?: boolean
-    ) => {
-        if (!stream) return;
+    // --- Replace track (memoized) ---
+    const replaceTrack = useCallback(
+        async (type: "video" | "audio", state: MediaState, facingOverride?: boolean) => {
+            if (!stream) return;
 
-        const newStream = await navigator.mediaDevices.getUserMedia(
-            getConstraints(
-                type === "video" ? state : isVidOn,
-                type === "audio" ? state : isMicOn,
-                facingOverride ?? isFrontCamera
-            )
-        );
+            const newStream = await navigator.mediaDevices.getUserMedia(
+                getConstraints(
+                    type === "video" ? state : isVidOn,
+                    type === "audio" ? state : isMicOn,
+                    facingOverride ?? isFrontCamera
+                )
+            );
 
-        const newTrack = type === "video" ? newStream.getVideoTracks()[0] : newStream.getAudioTracks()[0];
-        const senderTrack = stream.getTracks().find(t => t.kind === type);
-        if (senderTrack && newTrack) {
-            stream.removeTrack(senderTrack);
-            senderTrack.stop();
-            stream.addTrack(newTrack);
+            // Stop and remove old tracks of this type
+            stream.getTracks().forEach(track => {
+                if (track.kind === type) {
+                    track.stop();
+                    stream.removeTrack(track);
+                }
+            });
+
+            // Add new track(s) of this type
+            const newTracks = type === "video" ? newStream.getVideoTracks() : newStream.getAudioTracks();
+            newTracks.forEach(track => stream.addTrack(track));
+
             if (videoRef.current) videoRef.current.srcObject = stream;
-        }
 
-        if (type === "video") {
-            setIsVidOn(newTrack ? "on" : "off");
-        } else {
-            setIsMicOn(newTrack ? "on" : "off");
-        }
-    };
+            if (type === "video") setIsVidOn(newTracks.length ? "on" : "off");
+            else setIsMicOn(newTracks.length ? "on" : "off");
 
+            // Clean up extra tracks in newStream
+            stopAllTracks(newStream);
+        },
+        [stream, getConstraints, isVidOn, isMicOn, isFrontCamera]
+    );
+
+    // --- Toggle mic/video/camera ---
     const toggleMic = useCallback(() => {
         const newState: MediaState = isMicOn === "on" ? "off" : "on";
         replaceTrack("audio", newState);
@@ -105,8 +118,9 @@ export default function useMediaStream({
         replaceTrack("video", "on", newFacing);
     }, [isFrontCamera, replaceTrack]);
 
+    // --- Stop everything ---
     const stop = useCallback(() => {
-        stream?.getTracks().forEach(t => t.stop());
+        stopAllTracks(stream);
         setStream(null);
         if (videoRef.current) videoRef.current.srcObject = null;
         setIsMicOn("off");

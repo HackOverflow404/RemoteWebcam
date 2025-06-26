@@ -21,6 +21,8 @@ const BYPASS_CACHE_PATTERNS = [
   /firebaseio\.com/,
   /googleapis\.com.*firebase/,
   /\/stream/,
+  /fonts\.gstatic\.com/,
+  /fonts\.googleapis\.com/,
 ];
 
 // Helper: Should a request bypass the cache?
@@ -62,7 +64,10 @@ self.addEventListener("activate", (event) => {
 // Fetch: Caching strategy
 self.addEventListener("fetch", (event) => {
   const req = event.request;
+  return;
   if (req.method !== "GET") return;
+
+  console.log("[SW] Fetching:", req.url, "| bypass?", shouldBypassCache(req));
 
   event.respondWith(
     (async () => {
