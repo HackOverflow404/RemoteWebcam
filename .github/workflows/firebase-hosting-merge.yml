@@ -11,7 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install dependencies and deploy
+      - name: Install dependencies
+        working-directory: ./pwa-webcam
+        run: npm install
+      - name: Build and deploy
         working-directory: ./pwa-webcam
         run: npm run deploy
       - uses: FirebaseExtended/action-hosting-deploy@v0
