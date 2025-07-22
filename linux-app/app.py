@@ -177,14 +177,3 @@ class PixelStreamerApp(QMainWindow):
     def closeEvent(self, event):
         self.delete_code()
         event.accept()
-
-
-def main():
-    app = QApplication(sys.argv)
-    window = PixelStreamerApp()
-    window.show()
-    
-    sys.exit(app.exec())
-
-if __name__ == "__main__":
-    main()

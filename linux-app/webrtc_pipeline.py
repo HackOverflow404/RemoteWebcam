@@ -53,6 +53,8 @@ class WebRTCWorker(QObject):
         print("[TURN] Using ICE servers:", ice_servers)
         config = RTCConfiguration(iceServers = ice_servers)
         self.pc = RTCPeerConnection(configuration = config)
+        self.pc.addTransceiver('video', direction='recvonly')
+        self.pc.addTransceiver('audio', direction='recvonly')
 
         @self.pc.on("connectionstatechange")
         async def on_connectionstatechange():
