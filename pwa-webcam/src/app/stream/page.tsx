@@ -252,7 +252,7 @@ function StreamPage() {
                         <button
                             onClick={toggleStream}
                             className={`p-3 w-15 h-15 flex items-center justify-center ${
-                                isStreamOn ? 'text-red-500' : 'text-green-500'
+                                isStreamOn ? 'text-red-500' : connectionStatus === "connecting" ? 'text-yellow-500' : 'text-green-500'
                             }`}
                             aria-label={isStreamOn ? "Stop Streaming" : "Start Streaming"}>
                             <span className="material-symbols-outlined" style={{fontSize: "80px"}}>
