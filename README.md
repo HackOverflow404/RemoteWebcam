@@ -1,22 +1,22 @@
-# PixelStreamer 🎥
+# PixelStreamer
 
 **PixelStreamer** is a secure, real-time webcam and microphone streaming application that enables peer-to-peer (P2P) communication between your phone and your Linux desktop using WebRTC. The project uses Firebase as a signaling server via Cloud Functions, with a beautiful native Qt UI on the desktop side and a modern React/Next.js frontend on mobile.
 
 ---
 
-## 🚀 Features
+## Features
 
-- 🔐 **Secure 5-character pairing code** to initiate a connection
-- 🖥️ **Qt-based native desktop app** (Linux)
-- 📱 **React-based phone UI** (Next.js + WebRTC)
-- ☁️ **Serverless Firebase backend** (Cloud Functions + Firestore)
-- 🎥 Real-time video/audio streaming from phone to laptop
-- 🔄 Automatic connection cleanup and lifecycle management
-- 📦 Lightweight and fast — perfect for remote webcam use, streaming, or telepresence
+- **Secure 5-character pairing code** to initiate a connection
+- **Qt-based native desktop app** (Linux)
+- **React-based phone UI** (Next.js + WebRTC)
+- **Serverless Firebase backend** (Cloud Functions + Firestore)
+- Real-time video/audio streaming from phone to laptop
+- Automatic connection cleanup and lifecycle management
+- Lightweight and fast — perfect for remote webcam use, streaming, or telepresence
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 1. The QtPython Linux app requests code from a firebase function [generateCode](https://generatecode-qaf2yvcrrq-uc.a.run.app)
 2. The Linux app begins polling for an SDP offer using a firebase function [checkOffer](https://checkoffer-qaf2yvcrrq-uc.a.run.app)
@@ -36,13 +36,13 @@
 
 | Component | Technology |
 |----------|------------|
-| 📱 Phone Frontend | React + Next.js + Tailwind CSS + TypeScript + WebRTC |
-| 🖥️ Laptop App | Python 3 + PyQt5 + aiortc |
-| ☁️ Backend | Firebase (Firestore, Cloud Functions, Hosting) |
-| 🔄 Signaling | Firebase Firestore |
-| 🧪 Media | WebRTC Peer-to-Peer |
+| Phone Frontend | React + Next.js + Tailwind CSS + TypeScript + WebRTC |
+| Laptop App | Python 3 + PyQt5 + aiortc |
+| Backend | Firebase (Firestore, Cloud Functions, Hosting) |
+| Signaling | Firebase Firestore |
+| Media | WebRTC Peer-to-Peer |
 
-## 🖼️ Screenshots
+## Screenshots
 
 ### Laptop App (Qt UI)
 <img src="./assets/laptop-ui.png" alt="Laptop UI" width="600"/>
