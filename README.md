@@ -37,7 +37,7 @@
 | Component | Technology |
 |----------|------------|
 | Phone Frontend | React + Next.js + Tailwind CSS + TypeScript + WebRTC |
-| Laptop App | Python 3 + PyQt5 + aiortc |
+| Laptop App | Python 3 + PyQt6 + aiortc |
 | Backend | Firebase (Firestore, Cloud Functions, Hosting) |
 | Signaling | Firebase Firestore |
 | Media | WebRTC Peer-to-Peer |
