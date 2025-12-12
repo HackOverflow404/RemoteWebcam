@@ -28,6 +28,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
   });
 
   const peerRef = useRef<RTCPeerConnection | null>(null);
+  const dcRef = useRef<RTCDataChannel | null>(null);
   const pollingRef = useRef(false);
   const startedRef = useRef(false);
 
@@ -40,12 +41,20 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
   const cleanup = useCallback((reason?: string) => {
     log("cleanup()", reason ?? "");
 
-    pollingRef.current = false;
+    // Only send termination if *we* initiated it
+    if (reason !== "remote-linux-termination") {
+      if (dcRef.current?.readyState === "open") {
+        dcRef.current.send(
+          JSON.stringify({ type: "terminate", source: "pwa" })
+        );
+      }
+    }
+
+    dcRef.current = null;
     startedRef.current = false;
 
     if (peerRef.current) {
       try {
-        peerRef.current.onconnectionstatechange = null;
         peerRef.current.close();
       } catch {}
       peerRef.current = null;
@@ -110,7 +119,19 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
 
       const dc = pc.createDataChannel("chat");
       dc.onopen = () => dc.send("Hello from JS!");
-      dc.onmessage = (e) => console.log("Message from Python:", e.data);
+      dc.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+
+          if (msg.type === "terminate" && msg.source === "linux") {
+            console.log("Linux terminated session");
+            cleanup("remote-linux-termination");
+          }
+        } catch {
+          console.log("DataChannel message:", e.data);
+        }
+      };
+      dcRef.current = dc;
 
       media.getTracks().forEach((track) => {
         pc.addTrack(track, media);
