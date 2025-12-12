@@ -214,7 +214,7 @@ export default function useMediaStream({
     replaceTrack("video", newState);
   }, [isVidOn, replaceTrack]);
 
-  const flipCamera = useCallback(async () => {
+  const flipCamera = useCallback(async (): Promise<MediaStreamTrack | null> => {
     const newFacing = !isFrontCamera;
     setIsFrontCamera(newFacing);
 
@@ -223,7 +223,7 @@ export default function useMediaStream({
     );
 
     const newVideoTrack = newStream.getVideoTracks()[0];
-    if (!newVideoTrack || !streamRef.current) return;
+    if (!newVideoTrack || !streamRef.current) return null;
 
     // Replace video track in local stream
     streamRef.current.getVideoTracks().forEach((t) => {
@@ -236,7 +236,7 @@ export default function useMediaStream({
       videoRef.current.srcObject = streamRef.current;
     }
 
-    // IMPORTANT: do NOT stop newVideoTrack
+    return newVideoTrack; // 🔑 IMPORTANT
   }, [getConstraints, isFrontCamera, isMicOn]);
 
   // --- Stop everything (always uses ref) ---

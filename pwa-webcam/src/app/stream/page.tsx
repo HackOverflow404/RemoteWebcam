@@ -117,12 +117,6 @@ function StreamPage() {
     }
   }, [media, isLoadingMedia]);
 
-  useEffect(() => {
-    if (!isStreamOn || !media) return;
-    const track = media.getVideoTracks()[0];
-    replaceTrack("video", track);
-  }, [isFrontCamera]);
-
   // --- Unified video settings handler ---
   const handleVideoSettings = useCallback(
     (
@@ -168,7 +162,12 @@ function StreamPage() {
         playsInline
         muted
         controls={false}
-        onDoubleClick={flipCamera}
+        onDoubleClick={async () => {
+          const newTrack = await flipCamera();
+          if (newTrack && isStreamOn) {
+            replaceTrack("video", newTrack);
+          }
+        }}
         style={{
           transform: isFrontCamera ? "scaleX(-1)" : "scaleX(1)",
           transition: "opacity 0.3s ease",
