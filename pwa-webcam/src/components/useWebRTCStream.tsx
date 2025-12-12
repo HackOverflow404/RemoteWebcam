@@ -41,7 +41,6 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
   const cleanup = useCallback((reason?: string) => {
     log("cleanup()", reason ?? "");
 
-    // Only send termination if *we* initiated it
     if (reason !== "remote-linux-termination") {
       if (dcRef.current?.readyState === "open") {
         dcRef.current.send(
