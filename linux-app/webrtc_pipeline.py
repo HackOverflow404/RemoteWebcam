@@ -1,5 +1,4 @@
 import asyncio
-import json
 import time
 import threading
 import requests
@@ -13,10 +12,8 @@ from aiortc import (
 from PySide6.QtCore import QObject, Signal
 from av import VideoFrame
 import cv2
-import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum
-import random
 import logging
 
 logging.basicConfig(level=logging.DEBUG)
@@ -62,7 +59,7 @@ class WebRTCWorker(QObject):
 
         if self.loop and self.loop.is_running():
             self.loop.call_soon_threadsafe(
-                lambda: asyncio.create_task(self._shutdown())
+                lambda: asyncio.create_task(self.shutdown())
             )
 
         self.connection_state_changed.emit(ConnectionState.DISCONNECTED)
@@ -74,7 +71,12 @@ class WebRTCWorker(QObject):
     def _run_async_thread(self):
         asyncio.run(self._run())
 
-    async def _shutdown(self):
+    async def shutdown(self):
+        try:
+            await self.send_termination()
+        except Exception:
+            pass  # termination is best-effort
+
         if self.track_task:
             self.track_task.cancel()
             self.track_task = None
@@ -83,6 +85,8 @@ class WebRTCWorker(QObject):
             await self.pc.close()
             self.pc = None
 
+        self.running = False
+
     # --------------------
     # MAIN WEBRTC FLOW
     # --------------------
@@ -90,7 +94,7 @@ class WebRTCWorker(QObject):
     async def _run(self):
         self.loop = asyncio.get_running_loop()
 
-        print("⏳ Waiting for JS offer…")
+        print("Waiting for JS offer…")
         offer_json = await asyncio.to_thread(self.poll_for_offer, self.code)
         if not self.running:
             return
@@ -99,7 +103,7 @@ class WebRTCWorker(QObject):
             sdp=offer_json["sdp"],
             type=offer_json["type"],
         )
-        print("✅ Got JS offer")
+        print("Got JS offer")
 
         config = self.get_ice_configuration()
         self.pc = RTCPeerConnection(configuration=config)
@@ -116,7 +120,7 @@ class WebRTCWorker(QObject):
                 self.connection_state_changed.emit(ConnectionState.CONNECTED)
             elif state == "failed":
                 self.connection_state_changed.emit(ConnectionState.FAILED)
-                await self._shutdown()
+                await self.shutdown()
             elif state == "closed":
                 self.connection_state_changed.emit(ConnectionState.DISCONNECTED)
 
@@ -130,8 +134,12 @@ class WebRTCWorker(QObject):
         @self.pc.on("datachannel")
         def on_datachannel(channel):
             @channel.on("message")
-            def on_message(msg):
+            def on_open():
                 channel.send("Hello from Python!")
+            async def on_message(msg):
+                if (msg == "terminating session"):
+                    await self.shutdown()
+                    
 
         await self.pc.setRemoteDescription(offer)
         answer = await self.pc.createAnswer()
@@ -152,11 +160,20 @@ class WebRTCWorker(QObject):
         while self.running:
             await asyncio.sleep(1)
 
-        await self._shutdown()
+        await self.shutdown()
 
     # --------------------
     # HELPERS
     # --------------------
+    async def send_termination(self):
+        if not self.pc:
+            return
+
+        for channel in self.pc.sctp.transport._data_channels.values():
+            if channel.readyState == "open":
+                channel.send(
+                    '{"type":"terminate","source":"linux"}'
+                )
 
     def poll_for_offer(self, code):
         while self.running:
