@@ -117,6 +117,12 @@ function StreamPage() {
     }
   }, [media, isLoadingMedia]);
 
+  useEffect(() => {
+    if (connectionStatus === "disconnected" && isStreamOn) {
+      stopMedia();
+    }
+  }, [connectionStatus]);
+
   // --- Unified video settings handler ---
   const handleVideoSettings = useCallback(
     (
