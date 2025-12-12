@@ -71,7 +71,12 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     );
 
     // resp.json() is already an array of ICE‐server objects
-    const iceServers = await resp.json();
+    const raw = await resp.json();
+    const iceServers = raw.map((s: any) => ({
+      urls: s.urls ?? s.url,
+      username: s.username,
+      credential: s.credential,
+    }));
     return iceServers;
   }
 
@@ -237,6 +242,11 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
   // }, [cleanup, status]);
 
   const startStream = useCallback(async () => {
+    if (peerRef.current || status === "connecting" || status === "connected") {
+      log("startStream ignored: already active");
+      return;
+    }
+
     const {
       media,
       sessionCode,
@@ -264,6 +274,16 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       const pc = new RTCPeerConnection({ iceServers });
       peerRef.current = pc;
 
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === "connected") {
+          setStatus("connected");
+          setOn(true);
+        } else if (pc.connectionState === "failed") {
+          setError("PeerConnection failed");
+          cleanup();
+        }
+      };
+
       const dc = pc.createDataChannel("chat");
       dc.onopen = () => dc.send("Hello from JS!");
       dc.onmessage = (e) => console.log("📥 from Python:", e.data);
@@ -282,8 +302,9 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
         };
       });
 
-      await fetch("submitoffer", {
+      await fetch("https://submitoffer-qaf2yvcrrq-uc.a.run.app", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code, offer: pc.localDescription }),
       });
 
@@ -309,17 +330,6 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       // 6) Apply the answer
       await pc.setRemoteDescription(new RTCSessionDescription(answerDesc));
       console.log("✅ WebRTC connection established!");
-
-      // 7) Update status & leave the PC running
-      pc.onconnectionstatechange = () => {
-        if (pc.connectionState === "connected") {
-          setStatus("connected");
-          setOn(true);
-        } else if (pc.connectionState === "failed") {
-          setError("PeerConnection failed");
-          cleanup();
-        }
-      };
     } catch (e: any) {
       console.error("WebRTC error:", e);
       setError(e.message || "Unknown error");
