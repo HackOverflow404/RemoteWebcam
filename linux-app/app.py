@@ -28,7 +28,7 @@ class PixelStreamerApp(QMainWindow):
         self.worker = None
         self.poll_timer = None
         self.initUI()
-        self.frame_ready.connect(self._update_frame)
+        self.frame_ready.connect(self.update_frame)
 
     def initUI(self):
         with open("./assets/style.qss", "r") as f:
@@ -172,23 +172,17 @@ class PixelStreamerApp(QMainWindow):
             ConnectionState.DISCONNECTED: "#E74C3C",
             ConnectionState.FAILED: "#E74C3C",
         }
-        print(f"Connection state update: {state.value}")
-        match state:
-            case ConnectionState.CONNECTING:
-                self.connection_status.setText("Connection: Connecting...")
-            case (
-                ConnectionState.CONNECTED
-                | ConnectionState.FAILED
-                | ConnectionState.DISCONNECTED
-            ):
-                self.connection_status.setText(
-                    f"Connection: {state.value.capitalize()}"
-                )
 
+        if state == ConnectionState.DISCONNECTED:
+            self.reset_session_ui()
+
+        self.connection_status.setText(
+            f"Connection: {state.value.capitalize()}"
+        )
         self.connection_status.setStyleSheet(f"color: {color_map[state]}")
 
     @Slot(QImage)
-    def _update_frame(self, image: QImage):
+    def update_frame(self, image: QImage):
         pixmap = QPixmap.fromImage(image)
         self.video_label.setPixmap(pixmap)
     
@@ -209,6 +203,26 @@ class PixelStreamerApp(QMainWindow):
         ).copy()  # IMPORTANT: detach from numpy buffer
 
         self.frame_ready.emit(image)
+    
+    def reset_session_ui(self):
+        # Stop worker if still alive
+        if self.worker:
+            self.worker.stop()
+            self.worker = None
+
+        # Delete backend code
+        self.delete_code()
+
+        # Reset code button
+        btn = self.button_widgets.get("Generate Code")
+        if btn:
+            btn.setText("Generate Code")
+            btn.setEnabled(True)
+
+        # Clear preview
+        self.video_label.clear()
+
+        self.code = None
 
     def handle_code_deletion(self, button):
         self.delete_code()
