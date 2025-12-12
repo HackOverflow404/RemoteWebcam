@@ -117,6 +117,12 @@ function StreamPage() {
     }
   }, [media, isLoadingMedia]);
 
+  useEffect(() => {
+    if (!isStreamOn || !media) return;
+    const track = media.getVideoTracks()[0];
+    replaceTrack("video", track);
+  }, [isFrontCamera]);
+
   // --- Unified video settings handler ---
   const handleVideoSettings = useCallback(
     (

@@ -35,12 +35,8 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
   const [error, setError] = useState<string | null>(null);
   const [on, setOn] = useState(false);
 
-  const log = (...msg: unknown[]) =>
-    console.log("[useWebRTCStream]", ...msg);
+  const log = (...msg: unknown[]) => console.log("[useWebRTCStream]", ...msg);
 
-  /**
-   * 🔒 cleanup is now PRIVATE and ONLY called explicitly
-   */
   const cleanup = useCallback((reason?: string) => {
     log("cleanup()", reason ?? "");
 
@@ -58,13 +54,6 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     setOn(false);
     setStatus("disconnected");
   }, []);
-
-  /**
-   * ❌ REMOVED:
-   * useEffect(() => cleanup, [cleanup]);
-   *
-   * This was auto-destroying the connection on re-render.
-   */
 
   async function fetchIceServers() {
     const resp = await fetch(
@@ -121,8 +110,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
 
       const dc = pc.createDataChannel("chat");
       dc.onopen = () => dc.send("Hello from JS!");
-      dc.onmessage = (e) =>
-        console.log("📥 from Python:", e.data);
+      dc.onmessage = (e) => console.log("Message from Python:", e.data);
 
       media.getTracks().forEach((track) => {
         pc.addTrack(track, media);
@@ -137,17 +125,14 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
         };
       });
 
-      await fetch(
-        "https://submitoffer-qaf2yvcrrq-uc.a.run.app",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            code: sessionCode,
-            offer: pc.localDescription,
-          }),
-        }
-      );
+      await fetch("https://submitoffer-qaf2yvcrrq-uc.a.run.app", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code: sessionCode,
+          offer: pc.localDescription,
+        }),
+      });
 
       // Poll for answer
       let answer: RTCSessionDescriptionInit | null = null;
@@ -170,7 +155,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       }
 
       await pc.setRemoteDescription(answer);
-      log("✅ WebRTC fully established");
+      log("WebRTC fully established");
     } catch (e: any) {
       console.error("WebRTC error:", e);
       setError(e.message || "WebRTC error");
@@ -188,9 +173,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       const pc = peerRef.current;
       if (!pc) return;
 
-      const sender = pc.getSenders().find(
-        (s) => s.track?.kind === kind
-      );
+      const sender = pc.getSenders().find((s) => s.track?.kind === kind);
 
       if (sender) {
         await sender.replaceTrack(track);
