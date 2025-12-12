@@ -1,31 +1,44 @@
 #!/usr/bin/env python3
-import sys
 import requests
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-    QPushButton, QFrame, QLabel, QSizePolicy, QSpacerItem,
-    QSystemTrayIcon, QMenu
+    QApplication,
+    QMainWindow,
+    QWidget,
+    QHBoxLayout,
+    QVBoxLayout,
+    QPushButton,
+    QLabel,
+    QSizePolicy,
+    QSpacerItem,
+    QSystemTrayIcon,
+    QMenu
 )
-from PySide6.QtCore import Qt, QTimer, QThread, Signal
-from PySide6.QtGui import QFont, QIcon, QAction
+from PySide6.QtCore import Qt, QTimer, Signal, Slot
+from PySide6.QtGui import QFont, QIcon, QImage, QPixmap
 from webrtc_pipeline import WebRTCWorker, ConnectionState
+import numpy as np
+
 
 class PixelStreamerApp(QMainWindow):
+    frame_ready = Signal(QImage)
+    
     def __init__(self):
         super().__init__()
         self.code = None
         self.worker = None
         self.poll_timer = None
         self.initUI()
+        self.frame_ready.connect(self._update_frame)
 
     def initUI(self):
         with open("./assets/style.qss", "r") as f:
             self.setStyleSheet(f.read())
-        
+
         self.setWindowTitle("PixelStreamer")
         self.setGeometry(100, 100, 256, 160)
         self.font = QFont("Courier New")
         
+
         central_widget = QWidget()
         main_layout = QHBoxLayout()
         central_widget.setLayout(main_layout)
@@ -38,12 +51,12 @@ class PixelStreamerApp(QMainWindow):
         sidebar_layout.setSpacing(30)
         sidebar_layout.setAlignment(Qt.AlignHCenter)
         sidebar.setLayout(sidebar_layout)
-        
+
         title = QLabel("PixelStreamer")
         title.setFont(self.font)
         sidebar_layout.addWidget(title)
         title.setObjectName("titleLabel")
-        
+
         self.buttons = ["Generate Code", "Hide Into Tray", "Webcam", "Microphone"]
         self.button_widgets = {}
 
@@ -61,7 +74,9 @@ class PixelStreamerApp(QMainWindow):
         self.connection_status.setObjectName("connectionStatus")
         sidebar_layout.addWidget(self.connection_status)
 
-        sidebar_layout.addSpacerItem(QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding))
+        sidebar_layout.addSpacerItem(
+            QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding)
+        )
 
         preview_container = QVBoxLayout()
         preview_container.setContentsMargins(20, 40, 40, 40)
@@ -76,9 +91,17 @@ class PixelStreamerApp(QMainWindow):
         self.preview_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.preview_frame.setObjectName("previewFrame")
         preview_label.setBuddy(self.preview_frame)
+        
+        self.video_label = QLabel()
+        self.video_label.setAlignment(Qt.AlignCenter)
+        self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.video_label.setScaledContents(True)
+
+        # ADD IT TO THE PREVIEW FRAME
 
         # Create a layout for the preview frame to hold the GStreamer video widget
         self.preview_layout = QVBoxLayout()
+        self.preview_layout.addWidget(self.video_label)
         self.preview_frame.setLayout(self.preview_layout)
 
         preview_container.addWidget(preview_label)
@@ -126,15 +149,18 @@ class PixelStreamerApp(QMainWindow):
         button.setText(self.code)
         button.setEnabled(True)
         if self.code != "Error":
-            self.worker = WebRTCWorker(code = self.code, widget_win_id = int(self.preview_frame.winId()))
+            self.worker = WebRTCWorker(
+                code=self.code, widget_win_id=int(self.preview_frame.winId())
+            )
             self.worker.connection_state_changed.connect(self.update_connection_status)
+            self.worker.video_frame_received.connect(self.on_frame)
             self.worker.start()
 
     def request_code(self):
         try:
             response = requests.post("https://generatecode-qaf2yvcrrq-uc.a.run.app")
             response.raise_for_status()
-            return response.json()['code']
+            return response.json()["code"]
         except Exception as e:
             print(f"Failed to generate code: {e}")
             return "Error"
@@ -150,10 +176,39 @@ class PixelStreamerApp(QMainWindow):
         match state:
             case ConnectionState.CONNECTING:
                 self.connection_status.setText("Connection: Connecting...")
-            case ConnectionState.CONNECTED | ConnectionState.FAILED | ConnectionState.DISCONNECTED:
-                self.connection_status.setText(f"Connection: {state.value.capitalize()}")
+            case (
+                ConnectionState.CONNECTED
+                | ConnectionState.FAILED
+                | ConnectionState.DISCONNECTED
+            ):
+                self.connection_status.setText(
+                    f"Connection: {state.value.capitalize()}"
+                )
 
         self.connection_status.setStyleSheet(f"color: {color_map[state]}")
+
+    @Slot(QImage)
+    def _update_frame(self, image: QImage):
+        pixmap = QPixmap.fromImage(image)
+        self.video_label.setPixmap(pixmap)
+    
+    @Slot(object)
+    def on_frame(self, frame: np.ndarray):
+        if frame is None:
+            return
+
+        h, w, ch = frame.shape
+        bytes_per_line = ch * w
+
+        image = QImage(
+            frame.data,
+            w,
+            h,
+            bytes_per_line,
+            QImage.Format_BGR888,
+        ).copy()  # IMPORTANT: detach from numpy buffer
+
+        self.frame_ready.emit(image)
 
     def handle_code_deletion(self, button):
         self.delete_code()
@@ -168,12 +223,17 @@ class PixelStreamerApp(QMainWindow):
         try:
             if self.code is None:
                 return
-                
-            requests.post("https://deletecode-qaf2yvcrrq-uc.a.run.app", json={"code": self.code})
+
+            requests.post(
+                "https://deletecode-qaf2yvcrrq-uc.a.run.app", json={"code": self.code}
+            )
             self.code = None
         except Exception as e:
             print(f"Failed to delete code: {e}")
 
     def closeEvent(self, event):
+        if self.worker:
+            self.worker.stop()
+            self.worker = None
         self.delete_code()
         event.accept()
