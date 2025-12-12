@@ -27,7 +27,6 @@ async function getCodeDoc(code: string) {
 }
 
 // --- Functions ---
-
 export const generateCode = functions.https.onRequest((req, res) => {
     cors(req, res, async () => {
         try {
@@ -52,7 +51,7 @@ export const generateCode = functions.https.onRequest((req, res) => {
 
             return res.status(200).json({ code });
         } catch (error) {
-            functions.logger.error("Error in    function:", error);
+            functions.logger.error("Error in generateCode function:", error);
             return sendError(res, 500, "Internal server error");
         }
     });
@@ -73,7 +72,7 @@ export const deleteCode = functions.https.onRequest((req, res) => {
             await db.collection("codes").doc(code).delete();
             return res.status(200).json({ message: `Code ${code} deleted.` });
         } catch (error) {
-            functions.logger.error("Error in    function:", error);
+            functions.logger.error("Error in deleteCode function:", error);
             return sendError(res, 500, "Internal server error");
         }
     });
@@ -290,6 +289,84 @@ export const getTurnCredentials = functions.https.onRequest(async (req, res) => 
             res.status(200).json(token.iceServers);
         } catch (error) {
             functions.logger.error("Error in geTurnCredentials function:", error);
+            return sendError(res, 500, "Internal server error");
+        }
+    });
+});
+
+
+
+
+
+
+
+
+export const generateCodePushURL = functions.https.onRequest((req, res) => {
+    cors(req, res, async () => {
+        try {
+            if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
+
+            functions.logger.info("Generate Code Push URL Function: Request body:", { body: req.body });
+            
+            let { url } = req.body;
+            url = (url || "").trim();
+            if (!url) return sendError(res, 400, "Missing URL");
+
+            const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+            let code: string;
+            let exists = false;
+
+            do {
+                code = Array.from({ length: 5 }, () => charset[Math.floor(Math.random() * charset.length)]).join("");
+                const doc = await db.collection("codes").doc(code).get();
+                exists = doc.exists;
+            } while (exists);
+
+            await db.collection("codes").doc(code).set({
+                timestamp: admin.firestore.Timestamp.now(),
+                status: "waiting",
+                url: url
+            });
+
+            return res.status(200).json({ code });
+        } catch (error) {
+            functions.logger.error("Error in generateCodePushURL function:", error);
+            return sendError(res, 500, "Internal server error");
+        }
+    });
+});
+
+export const getURL = functions.https.onRequest((req, res) => {
+    cors(req, res, async () => {
+        try {
+            if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
+
+            functions.logger.info("Get URL Function: Request body:", { body: req.body });
+
+            let { code } = req.body;
+            code = (code || "").trim().toUpperCase();
+            if (!code) return sendError(res, 400, "Missing code");
+            if (!isValidCode(code)) return sendError(res, 400, "Invalid code format");
+
+            const { doc, data } = await getCodeDoc(code);
+            if (!doc.exists || !data) {
+                return res.status(404).json({ 
+                    success: false,
+                    message: "Code not found" 
+                });
+            }
+            if (data.status !== "waiting") {
+                return res.status(409).json({
+                    success: false,
+                    message: "Code already used or invalid"
+                });
+            }
+
+            return res.status(200).json({
+                url: data.url,
+            });
+        } catch (error) {
+            functions.logger.error("Error in getURL function:", error);
             return sendError(res, 500, "Internal server error");
         }
     });
