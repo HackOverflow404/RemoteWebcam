@@ -1,284 +1,329 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import React, { useState, useCallback, useEffect, Suspense, useMemo } from "react";
-const AudioVolumeIndicator = React.lazy(() => import("@/components/AudioVolumeIndicator"));
+import React, {
+  useState,
+  useCallback,
+  useEffect,
+  Suspense,
+  useMemo,
+} from "react";
+const AudioVolumeIndicator = React.lazy(
+  () => import("@/components/AudioVolumeIndicator")
+);
 import useMediaStream from "@/components/useMediaStream";
 import useWebRTCStream from "@/components/useWebRTCStream";
 
 // --- Icon mappings ---
 const icons = {
-    fps: { "30": "30fps", "60": "60fps" } as const,
-    resolution: { sd: "sd", hd: "hd", "4k": "4k" } as const,
-    microphone: { on: "mic", off: "mic_off", error: "mic_alert" } as const,
-    video: { on: "videocam", off: "videocam_off", error: "videocam_alert" } as const,
-    connection: { connecting: "cloud_sync", connected: "cloud_done", disconnected: "cloud_off", error: "cloud_alert" } as const,
+  fps: { "30": "30fps", "60": "60fps" } as const,
+  resolution: { sd: "sd", hd: "hd", "4k": "4k" } as const,
+  microphone: { on: "mic", off: "mic_off", error: "mic_alert" } as const,
+  video: {
+    on: "videocam",
+    off: "videocam_off",
+    error: "videocam_alert",
+  } as const,
+  connection: {
+    connecting: "cloud_sync",
+    connected: "cloud_done",
+    disconnected: "cloud_off",
+    error: "cloud_alert",
+  } as const,
 };
 
 function StreamPage() {
-    const router = useRouter();
-    const searchParams = useSearchParams();
+  const router = useRouter();
+  const searchParams = useSearchParams();
 
-    // Memoize the extracted values to prevent unnecessary rerenders
-    const { code, webcam, mic, componentKey } = useMemo(() => {
-        const extractedCode = searchParams.get("code") || "";
-        const extractedWebcam = searchParams.get("webcam") === "true";
-        const extractedMic = searchParams.get("mic") === "true";
-        
-        return {
-            code: extractedCode,
-            webcam: extractedWebcam,
-            mic: extractedMic,
-            componentKey: `${extractedCode}-${extractedWebcam}-${extractedMic}`
-        };
-    }, [searchParams]);
+  // Memoize the extracted values to prevent unnecessary rerenders
+  const { code, webcam, mic, componentKey } = useMemo(() => {
+    const extractedCode = searchParams.get("code") || "";
+    const extractedWebcam = searchParams.get("webcam") === "true";
+    const extractedMic = searchParams.get("mic") === "true";
 
-    const sessionCode = code;
-    const initialWebcam = webcam;
-    const initialMic = mic;
+    return {
+      code: extractedCode,
+      webcam: extractedWebcam,
+      mic: extractedMic,
+      componentKey: `${extractedCode}-${extractedWebcam}-${extractedMic}`,
+    };
+  }, [searchParams]);
 
-    const [fps, setFps] = useState<"30" | "60">("60");
-    const [resolution, setResolution] = useState<"sd" | "hd" | "4k">("hd");
-    const [exposure, setExposure] = useState(0);
+  const sessionCode = code;
+  const initialWebcam = webcam;
+  const initialMic = mic;
 
-    // -- Media Stream Hook --
-    const {
-        videoRef,
-        stream: media,
-        start: startMedia,
-        stop: stopMedia,
-        toggleMic,
-        toggleVideo,
-        flipCamera,
-        isMicOn,
-        isVidOn,
-        isFrontCamera,
-        loading: isLoadingMedia,
-        error: mediaStreamError,
-        updateConstraints,
-    } = useMediaStream({
-        initialAudio: initialMic,
-        initialVideo: initialWebcam,
-        fps,
-        resolution,
-    });
-    
-    // -- WebRTC Hook --
-    const {
-        startStream,
-        stopStream,
-        toggleStream,
-        replaceTrack,
-        isStreamOn,
-        connectionStatus,
-        error: RTCStreamError,
-    } = useWebRTCStream({
-        videoRef,
-        media,
-        sessionCode: sessionCode,
-        isMicOn,
-        isVidOn,
-        isFrontCamera,
-        resolution,
-        fps: Number(fps),
-        exposure,
-        startMedia,
-        stopMedia,
-    });
+  const [fps, setFps] = useState<"30" | "60">("60");
+  const [resolution, setResolution] = useState<"sd" | "hd" | "4k">("hd");
+  const [exposure, setExposure] = useState(0);
 
-    // --- Combine errors for prioritized display ---
-    const allErrors = [mediaStreamError, RTCStreamError].filter(Boolean);
-    const errorMessage = allErrors[0] || null;
+  // -- Media Stream Hook --
+  const {
+    videoRef,
+    stream: media,
+    start: startMedia,
+    stop: stopMedia,
+    toggleMic,
+    toggleVideo,
+    flipCamera,
+    isMicOn,
+    isVidOn,
+    isFrontCamera,
+    loading: isLoadingMedia,
+    error: mediaStreamError,
+    updateConstraints,
+  } = useMediaStream({
+    initialAudio: initialMic,
+    initialVideo: initialWebcam,
+    fps,
+    resolution,
+  });
 
-    // --- Handle initial media and stream startup ---
-    useEffect(() => {
-        if (sessionCode) {
-            startMedia();
-        }
-        return () => {
-            stopMedia();
-        };
-    }, [sessionCode]);
+  // -- WebRTC Hook --
+  const {
+    startStream,
+    stopStream,
+    replaceTrack,
+    isStreamOn,
+    connectionStatus,
+    error: RTCStreamError,
+  } = useWebRTCStream({
+    videoRef,
+    media,
+    sessionCode: sessionCode,
+    isMicOn,
+    isVidOn,
+    isFrontCamera,
+    resolution,
+    fps: Number(fps),
+    exposure,
+    startMedia,
+    stopMedia,
+  });
 
-    useEffect(() => {
-        // Only (re)start stream when media is available and not loading
-        if (media && !isLoadingMedia && isStreamOn) {
-            startStream();
-            return () => stopStream();
-        }
-        // eslint-disable-next-line
-    }, [media, isLoadingMedia, isStreamOn]);
+  // --- Combine errors for prioritized display ---
+  const allErrors = [mediaStreamError, RTCStreamError].filter(Boolean);
+  const errorMessage = allErrors[0] || null;
 
-    // --- Reactively update WebRTC track if media changes (e.g., after settings update) ---
-    useEffect(() => {
-        // Use this effect if your WebRTC hook supports dynamic track replacement
-        if (isStreamOn && media && replaceTrack) {
-            // Replace both audio and video tracks
-            const videoTrack = media.getVideoTracks()[0];
-            const audioTrack = media.getAudioTracks()[0];
-            if (videoTrack) replaceTrack("video", videoTrack);
-            if (audioTrack) replaceTrack("audio", audioTrack);
-        }
-    }, [isStreamOn, media]);
+  // --- Handle initial media and stream startup ---
+  useEffect(() => {
+    if (sessionCode) startMedia();
+  }, [sessionCode]);
 
-    // --- Unified video settings handler ---
-    const handleVideoSettings = useCallback((newFps?: "30" | "60", newRes?: "sd" | "hd" | "4k", newExposure?: number) => {
-        if (newFps) setFps(newFps);
-        if (newRes) setResolution(newRes);
-        if (typeof newExposure === "number") setExposure(newExposure);
+  useEffect(() => {
+    if (media && !isLoadingMedia && !isStreamOn) {
+      startStream();
+    }
+  }, [media, isLoadingMedia]);
 
-        // Call a unified media constraints update if available (must implement in your hook)
-        if (updateConstraints) {
-            updateConstraints({
-                fps: newFps || fps,
-                resolution: newRes || resolution,
-                exposure: typeof newExposure === "number" ? newExposure : exposure,
-            });
-        } else {
-            // fallback: toggle video to trigger effect
-            if (isVidOn && media) setTimeout(toggleVideo, 100);
-        }
-    }, [fps, resolution, exposure, updateConstraints, isVidOn, media, toggleVideo]);
+  // --- Unified video settings handler ---
+  const handleVideoSettings = useCallback(
+    (
+      newFps?: "30" | "60",
+      newRes?: "sd" | "hd" | "4k",
+      newExposure?: number
+    ) => {
+      if (newFps) setFps(newFps);
+      if (newRes) setResolution(newRes);
+      if (typeof newExposure === "number") setExposure(newExposure);
 
-    const handleBack = useCallback(() => {
-        stopStream();
-        router.push("/");
-    }, [stopStream, router]);
-    
-    return (
-        <section className="relative w-screen h-screen">
-            {isLoadingMedia && (
-                <div className="absolute inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 pointer-events-none">
-                    <div className="text-white text-2xl">Loading Media...</div>
-                </div>
-            )}
+      // Call a unified media constraints update if available (must implement in your hook)
+      if (updateConstraints) {
+        updateConstraints({
+          fps: newFps || fps,
+          resolution: newRes || resolution,
+          exposure: typeof newExposure === "number" ? newExposure : exposure,
+        });
+      } else {
+        // fallback: toggle video to trigger effect
+        if (isVidOn && media) setTimeout(toggleVideo, 100);
+      }
+    },
+    [fps, resolution, exposure, updateConstraints, isVidOn, media, toggleVideo]
+  );
 
-            <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted
-                controls={false}
-                onDoubleClick={flipCamera}
-                style={{ transform: isFrontCamera ? "scaleX(-1)" : "scaleX(1)", transition: "opacity 0.3s ease" }}
-                className="absolute inset-0 w-full h-full object-cover z-0"
-            />
+  const handleBack = useCallback(() => {
+    stopStream();
+    router.push("/");
+  }, [stopStream, router]);
 
-            {errorMessage && (
-                <div className="absolute top-24 left-0 right-0 flex justify-center animate-pulse z-20">
-                    <div className="bg-red-500 text-white px-4 py-2 rounded-md flex items-center">
-                        <span>{errorMessage}</span>
-                        <button className="ml-2" onClick={() => {/* Clear all errors if needed */}}>
-                            ✕
-                        </button>
-                    </div>
-                </div>
-            )}
+  return (
+    <section className="relative w-screen h-screen">
+      {isLoadingMedia && (
+        <div className="absolute inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 pointer-events-none">
+          <div className="text-white text-2xl">Loading Media...</div>
+        </div>
+      )}
 
-            <div className={`absolute top-16 right-4 flex items-center ${connectionStatus === "connected" ? "text-green-500" : connectionStatus === "connecting" ? "text-yellow-500" : connectionStatus === "disconnected" ? "text-gray-500" : "text-red-500"}`}>
-                <span className="material-symbols-outlined">{icons.connection[connectionStatus]}</span>
-                <span className="ml-2">{connectionStatus.charAt(0).toUpperCase() + connectionStatus.slice(1)}</span>
-            </div>
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        controls={false}
+        onDoubleClick={flipCamera}
+        style={{
+          transform: isFrontCamera ? "scaleX(-1)" : "scaleX(1)",
+          transition: "opacity 0.3s ease",
+        }}
+        className="absolute inset-0 w-full h-full object-cover z-0"
+      />
 
-            {sessionCode && (
-                <div className="absolute top-16 left-4 bg-black bg-opacity-50 text-white px-3 py-1 rounded-md">
-                    Code: {sessionCode}
-                </div>
-            )}
+      {errorMessage && (
+        <div className="absolute top-24 left-0 right-0 flex justify-center animate-pulse z-20">
+          <div className="bg-red-500 text-white px-4 py-2 rounded-md flex items-center">
+            <span>{errorMessage}</span>
+            <button
+              className="ml-2"
+              onClick={() => {
+                /* Clear all errors if needed */
+              }}
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
 
-            {/* Overlay setting buttons */}
-            <div className="flex flex-col items-center inset-0 z-1">
-                {/* Top settings */}
-                <header className="flex fixed top-0 w-screen py-5 justify-evenly z-1">
-                    {/* Back Button */}
-                    <button
-                        onClick={handleBack}
-                        className="p-3"
-                        aria-label="Return"
-                    >
-                        <span className="material-symbols-outlined">keyboard_return</span>
-                    </button>
-                    {/* FPS Button */}
-                    <button
-                        onClick={() => handleVideoSettings(fps === "30" ? "60" : "30")}
-                        className="p-3"
-                        aria-label="Toggle FPS"
-                    >
-                        <span className="material-symbols-outlined">{icons.fps[fps]}</span>
-                    </button>
-                    {/* Portrait Mode Button */}
-                    <button
-                        className="p-3"
-                        aria-label="Portrait Mode"
-                    >
-                        <span className="material-symbols-outlined">frame_person</span>
-                    </button>
-                    {/* Exposure Button */}
-                    <button
-                        onClick={() => handleVideoSettings(undefined, undefined, (exposure + 1) % 3)}
-                        className="p-3"
-                        aria-label="Adjust Exposure"
-                    >
-                        <span className="material-symbols-outlined">exposure</span>
-                    </button>
-                    {/* Resolution Button */}
-                    <button
-                        onClick={() => handleVideoSettings(undefined, resolution === "sd" ? "hd" : resolution === "hd" ? "4k" : "sd")}
-                        className="p-3"
-                        aria-label="Toggle Resolution"
-                    >
-                        <span className="material-symbols-outlined">{icons.resolution[resolution]}</span>
-                    </button>
-                </header>            
-                {/* Bottom settings */}
-                <footer className="flex flex-col fixed bottom-0 w-screen py-10 justify-evenly z-1">
-                    {/* Noise Level Indicator */}
-                    {isMicOn === "on" && media && media.getAudioTracks().length > 0 && (
-                        <React.Suspense fallback={<div>Loading Mic Volume...</div>}>
-                            <AudioVolumeIndicator isEnabled={true} mediaStream={media} />
-                        </React.Suspense>
-                    )}    
-                    <div className="flex flex-row w-full justify-evenly">
-                        {/* Mic Button */}
-                        <button
-                            onClick={toggleMic}
-                            className="p-3 w-15 h-15 flex items-center justify-center"
-                            aria-label={isMicOn === "on" ? "Mute Microphone" : "Unmute Microphone"}>
-                            <span className="material-symbols-outlined" style={{fontSize: "40px"}}>
-                                {icons.microphone[isMicOn]}
-                            </span>
-                        </button>                    
-                        {/* Stream Button */}
-                        <button
-                            onClick={toggleStream}
-                            className={`p-3 w-15 h-15 flex items-center justify-center ${
-                                isStreamOn ? 'text-red-500' : connectionStatus === "connecting" ? 'text-yellow-500' : 'text-green-500'
-                            }`}
-                            aria-label={isStreamOn ? "Stop Streaming" : "Start Streaming"}>
-                            <span className="material-symbols-outlined" style={{fontSize: "80px"}}>
-                                {isStreamOn ? "radio_button_checked" : "radio_button_unchecked"}
-                            </span>
-                        </button>                    
-                        {/* Video Button */}
-                        <button
-                            onClick={toggleVideo}
-                            className="p-3 w-15 h-15 flex items-center justify-center"
-                            aria-label={isVidOn === "on" ? "Stop Video" : "Start Video"}>
-                            <span className="material-symbols-outlined" style={{fontSize: "40px"}}>
-                                {icons.video[isVidOn]}
-                            </span>
-                        </button>
-                    </div>
-                </footer>
-            </div>
-        </section>
-    );
+      <div
+        className={`absolute top-16 right-4 flex items-center ${
+          connectionStatus === "connected"
+            ? "text-green-500"
+            : connectionStatus === "connecting"
+            ? "text-yellow-500"
+            : connectionStatus === "disconnected"
+            ? "text-gray-500"
+            : "text-red-500"
+        }`}
+      >
+        <span className="material-symbols-outlined">
+          {icons.connection[connectionStatus]}
+        </span>
+        <span className="ml-2">
+          {connectionStatus.charAt(0).toUpperCase() + connectionStatus.slice(1)}
+        </span>
+      </div>
+
+      {sessionCode && (
+        <div className="absolute top-16 left-4 bg-black bg-opacity-50 text-white px-3 py-1 rounded-md">
+          Code: {sessionCode}
+        </div>
+      )}
+
+      {/* Overlay setting buttons */}
+      <div className="flex flex-col items-center inset-0 z-1">
+        {/* Top settings */}
+        <header className="flex fixed top-0 w-screen py-5 justify-evenly z-1">
+          {/* Back Button */}
+          <button onClick={handleBack} className="p-3" aria-label="Return">
+            <span className="material-symbols-outlined">keyboard_return</span>
+          </button>
+          {/* FPS Button */}
+          <button
+            onClick={() => handleVideoSettings(fps === "30" ? "60" : "30")}
+            className="p-3"
+            aria-label="Toggle FPS"
+          >
+            <span className="material-symbols-outlined">{icons.fps[fps]}</span>
+          </button>
+          {/* Portrait Mode Button */}
+          <button className="p-3" aria-label="Portrait Mode">
+            <span className="material-symbols-outlined">frame_person</span>
+          </button>
+          {/* Exposure Button */}
+          <button
+            onClick={() =>
+              handleVideoSettings(undefined, undefined, (exposure + 1) % 3)
+            }
+            className="p-3"
+            aria-label="Adjust Exposure"
+          >
+            <span className="material-symbols-outlined">exposure</span>
+          </button>
+          {/* Resolution Button */}
+          <button
+            onClick={() =>
+              handleVideoSettings(
+                undefined,
+                resolution === "sd" ? "hd" : resolution === "hd" ? "4k" : "sd"
+              )
+            }
+            className="p-3"
+            aria-label="Toggle Resolution"
+          >
+            <span className="material-symbols-outlined">
+              {icons.resolution[resolution]}
+            </span>
+          </button>
+        </header>
+        {/* Bottom settings */}
+        <footer className="flex flex-col fixed bottom-0 w-screen py-10 justify-evenly z-1">
+          {/* Noise Level Indicator */}
+          {isMicOn === "on" && media && media.getAudioTracks().length > 0 && (
+            <React.Suspense fallback={<div>Loading Mic Volume...</div>}>
+              <AudioVolumeIndicator isEnabled={true} mediaStream={media} />
+            </React.Suspense>
+          )}
+          <div className="flex flex-row w-full justify-evenly">
+            {/* Mic Button */}
+            <button
+              onClick={toggleMic}
+              className="p-3 w-15 h-15 flex items-center justify-center"
+              aria-label={
+                isMicOn === "on" ? "Mute Microphone" : "Unmute Microphone"
+              }
+            >
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: "40px" }}
+              >
+                {icons.microphone[isMicOn]}
+              </span>
+            </button>
+            {/* Stream Button */}
+            <button
+              onClick={isStreamOn ? stopStream : startStream}
+              className={`p-3 w-15 h-15 flex items-center justify-center ${
+                isStreamOn
+                  ? "text-red-500"
+                  : connectionStatus === "connecting"
+                  ? "text-yellow-500"
+                  : "text-green-500"
+              }`}
+              aria-label={isStreamOn ? "Stop Streaming" : "Start Streaming"}
+            >
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: "80px" }}
+              >
+                {isStreamOn ? "radio_button_checked" : "radio_button_unchecked"}
+              </span>
+            </button>
+            {/* Video Button */}
+            <button
+              onClick={toggleVideo}
+              className="p-3 w-15 h-15 flex items-center justify-center"
+              aria-label={isVidOn === "on" ? "Stop Video" : "Start Video"}
+            >
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: "40px" }}
+              >
+                {icons.video[isVidOn]}
+              </span>
+            </button>
+          </div>
+        </footer>
+      </div>
+    </section>
+  );
 }
 
 export default function Page() {
-    return (
-        <Suspense fallback={<div>Loading stream...</div>}>
-            <StreamPage />
-        </Suspense>
-    );
+  return (
+    <Suspense fallback={<div>Loading stream...</div>}>
+      <StreamPage />
+    </Suspense>
+  );
 }
