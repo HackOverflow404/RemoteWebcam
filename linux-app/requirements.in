@@ -4,3 +4,4 @@ opencv-python
 aiortc
 av
 numpy
+pip-tools
