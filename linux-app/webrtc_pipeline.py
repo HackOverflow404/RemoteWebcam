@@ -12,11 +12,11 @@ from aiortc import (
 from PySide6.QtCore import QObject, Signal
 from av import VideoFrame
 import cv2
-from datetime import datetime
 from enum import Enum
-import logging
-
-logging.basicConfig(level=logging.DEBUG)
+import json
+from collections import deque
+from virtual_camera import VirtualCamThread
+import numpy as np
 
 
 class ConnectionState(Enum):
@@ -32,11 +32,17 @@ class WebRTCWorker(QObject):
 
     def __init__(self, code: str, widget_win_id: int):
         super().__init__()
-        self.code = code
         self.pc = None
-        self.running = False
         self.loop = None
+        self.code = code
+        self.running = False
         self.track_task = None
+        self.last_preview_ts = 0
+        self.data_channels = set()
+        self.shutting_down = False
+        self.virtual_cam_thread = None
+        self.preview_interval = 1 / 10
+        self.frame_queue = deque(maxlen=2)
 
         self.CHECK_OFFER_URL = "https://checkoffer-qaf2yvcrrq-uc.a.run.app"
         self.SUBMIT_ANSWER_URL = "https://submitanswer-qaf2yvcrrq-uc.a.run.app"
@@ -56,13 +62,10 @@ class WebRTCWorker(QObject):
 
     def stop(self):
         self.running = False
-
         if self.loop and self.loop.is_running():
             self.loop.call_soon_threadsafe(
-                lambda: asyncio.create_task(self.shutdown())
+                lambda: asyncio.create_task(self._shutdown())
             )
-
-        self.connection_state_changed.emit(ConnectionState.DISCONNECTED)
 
     # --------------------
     # THREAD / LOOP SETUP
@@ -71,21 +74,34 @@ class WebRTCWorker(QObject):
     def _run_async_thread(self):
         asyncio.run(self._run())
 
-    async def shutdown(self):
+    async def _shutdown(self):
+        if self.shutting_down:
+            return
+        self.shutting_down = True
+
         try:
             await self.send_termination()
         except Exception:
-            pass  # termination is best-effort
+            pass
 
         if self.track_task:
             self.track_task.cancel()
             self.track_task = None
+
+        for ch in self.data_channels:
+            try:
+                ch.close()
+            except Exception:
+                pass
+        self.data_channels.clear()
 
         if self.pc:
             await self.pc.close()
             self.pc = None
 
         self.running = False
+        self.virtual_cam_thread = None
+        self.connection_state_changed.emit(ConnectionState.DISCONNECTED)
 
     # --------------------
     # MAIN WEBRTC FLOW
@@ -120,26 +136,40 @@ class WebRTCWorker(QObject):
                 self.connection_state_changed.emit(ConnectionState.CONNECTED)
             elif state == "failed":
                 self.connection_state_changed.emit(ConnectionState.FAILED)
-                await self.shutdown()
+                self.running = False
             elif state == "closed":
-                self.connection_state_changed.emit(ConnectionState.DISCONNECTED)
+                self.running = False
 
         @self.pc.on("track")
         def on_track(track):
             if track.kind == "video":
-                self.track_task = asyncio.create_task(
-                    self.handle_track(track)
-                )
+                self.track_task = asyncio.create_task(self.handle_track(track))
+
+                if not self.virtual_cam_thread:
+                    self.virtual_cam_thread = VirtualCamThread(
+                        frame_queue=self.frame_queue,
+                        running_flag=lambda: self.running,
+                        fps=20,
+                    )
+                    self.virtual_cam_thread.start()
 
         @self.pc.on("datachannel")
         def on_datachannel(channel):
+            self.data_channels.add(channel)
+
+            @channel.on("open")
+            def on_open(*args):
+                channel.send('{"type":"hello","source":"linux"}')
+
             @channel.on("message")
-            def on_open():
-                channel.send("Hello from Python!")
             async def on_message(msg):
-                if (msg == "terminating session"):
-                    await self.shutdown()
-                    
+                try:
+                    data = msg if isinstance(msg, dict) else json.loads(msg)
+                except Exception:
+                    return
+
+                if data.get("type") == "terminate":
+                    await self._shutdown()
 
         await self.pc.setRemoteDescription(offer)
         answer = await self.pc.createAnswer()
@@ -157,10 +187,11 @@ class WebRTCWorker(QObject):
             },
         )
 
-        while self.running:
-            await asyncio.sleep(1)
-
-        await self.shutdown()
+        try:
+            while self.running:
+                await asyncio.sleep(1)
+        finally:
+            await self._shutdown()
 
     # --------------------
     # HELPERS
@@ -169,18 +200,19 @@ class WebRTCWorker(QObject):
         if not self.pc:
             return
 
-        for channel in self.pc.sctp.transport._data_channels.values():
+        for channel in self.data_channels:
             if channel.readyState == "open":
-                channel.send(
-                    '{"type":"terminate","source":"linux"}'
-                )
+                channel.send('{"type":"terminate","source":"linux"}')
 
     def poll_for_offer(self, code):
         while self.running:
             r = requests.post(self.CHECK_OFFER_URL, json={"code": code})
             if r.status_code == 200 and r.json().get("offer"):
                 return r.json()["offer"]
-            time.sleep(1)
+            for _ in range(10):
+                if not self.running:
+                    return None
+                time.sleep(0.1)
         return None
 
     def get_ice_configuration(self):
@@ -197,36 +229,57 @@ class WebRTCWorker(QObject):
                 )
             )
         return RTCConfiguration(iceServers=servers)
+    
+    def letterbox(self, img, out_w, out_h):
+        h, w = img.shape[:2]
+
+        scale = min(out_w / w, out_h / h)
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+
+        resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+        canvas = np.zeros((out_h, out_w, 3), dtype=np.uint8)
+
+        x_off = (out_w - new_w) // 2
+        y_off = (out_h - new_h) // 2
+
+        canvas[y_off:y_off + new_h, x_off:x_off + new_w] = resized
+        return canvas
 
     # --------------------
     # TRACK HANDLER (FIXED)
     # --------------------
-
     async def handle_track(self, track: MediaStreamTrack):
-        frame_count = 0
-
         try:
             while self.running:
                 frame = await track.recv()
-                frame_count += 1
 
-                if isinstance(frame, VideoFrame):
-                    frame = frame.to_ndarray(format="bgr24")
+                if not isinstance(frame, VideoFrame):
+                    continue
 
-                timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                cv2.putText(
-                    frame,
-                    timestamp,
-                    (10, frame.shape[0] - 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (0, 255, 0),
-                    2,
+                img = frame.to_ndarray(format="bgr24")
+                
+                VIRTUAL_CAM_WIDTH = 1280
+                VIRTUAL_CAM_HEIGHT = 720
+
+                # Adaptive letterboxing to fixed output size
+                img = self.letterbox(
+                    img,
+                    VIRTUAL_CAM_WIDTH,
+                    VIRTUAL_CAM_HEIGHT,
                 )
 
-                self.video_frame_received.emit(frame)
+                # Non-blocking enqueue (always same shape now)
+                self.frame_queue.append(img)
+
+                # Preview throttle
+                now = time.monotonic()
+                if now - self.last_preview_ts >= self.preview_interval:
+                    self.last_preview_ts = now
+                    self.video_frame_received.emit(img)
 
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            print("Track error:", e)
+            print("Track recv error:", e)

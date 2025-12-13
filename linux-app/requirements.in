@@ -5,3 +5,4 @@ aiortc
 av
 numpy
 pip-tools
+pyvirtualcam

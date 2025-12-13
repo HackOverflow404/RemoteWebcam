@@ -17,19 +17,17 @@ from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QFont, QIcon, QImage, QPixmap
 from webrtc_pipeline import WebRTCWorker, ConnectionState
 import numpy as np
+import cv2
 
 
 class PixelStreamerApp(QMainWindow):
-    frame_ready = Signal(QImage)
-    
     def __init__(self):
         super().__init__()
         self.code = None
         self.worker = None
         self.poll_timer = None
         self.initUI()
-        self.frame_ready.connect(self.update_frame)
-
+    
     def initUI(self):
         with open("./assets/style.qss", "r") as f:
             self.setStyleSheet(f.read())
@@ -181,11 +179,6 @@ class PixelStreamerApp(QMainWindow):
         )
         self.connection_status.setStyleSheet(f"color: {color_map[state]}")
 
-    @Slot(QImage)
-    def update_frame(self, image: QImage):
-        pixmap = QPixmap.fromImage(image)
-        self.video_label.setPixmap(pixmap)
-    
     @Slot(object)
     def on_frame(self, frame: np.ndarray):
         if frame is None:
@@ -194,21 +187,25 @@ class PixelStreamerApp(QMainWindow):
         h, w, ch = frame.shape
         bytes_per_line = ch * w
 
+        # BGR → RGB (IMPORTANT)
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
         image = QImage(
-            frame.data,
+            rgb.data,
             w,
             h,
             bytes_per_line,
-            QImage.Format_BGR888,
-        ).copy()  # IMPORTANT: detach from numpy buffer
+            QImage.Format_RGB888,
+        )
 
-        self.frame_ready.emit(image)
+        self.video_label.setPixmap(QPixmap.fromImage(image))
     
     def reset_session_ui(self):
-        # Stop worker if still alive
-        if self.worker:
-            self.worker.stop()
-            self.worker = None
+        if not self.worker:
+            return
+        
+        self.worker.stop()
+        self.worker = None
 
         # Delete backend code
         self.delete_code()
