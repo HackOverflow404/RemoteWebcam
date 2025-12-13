@@ -54,39 +54,12 @@ function StreamPage() {
   const initialWebcam = webcam;
   const initialMic = mic;
 
-  const [resolution, setResolution] = useState<"sd" | "hd" | "4k">("hd");
+  const [orientation, setOrientation] = useState<OrientationType>(
+    window.screen.orientation.type
+  );
   const [fps, setFps] = useState<"30" | "60">("60");
+  const [resolution, setResolution] = useState<"sd" | "hd" | "4k">("hd");
   const [exposure, setExposure] = useState(0);
-
-  const [isLandscape, setIsLandscape] = useState(false);
-  const [vp, setVp] = useState({ w: 0, h: 0 });
-
-  const stageStyle = useMemo<React.CSSProperties>(() => {
-    const w = vp.w || 1;
-    const h = vp.h || 1;
-
-    if (!isLandscape) {
-      return {
-        position: "absolute",
-        top: 0,
-        left: 0,
-        width: w,
-        height: h,
-      };
-    }
-
-    // After rotate(90deg) about top-left, the content sits above the screen (negative Y).
-    // translateY(h) moves it down into view.
-    return {
-      position: "absolute",
-      top: 0,
-      left: 0,
-      width: h, // swapped
-      height: w, // swapped
-      transformOrigin: "top left",
-      transform: `translateY(${h}px) rotate(90deg)`,
-    };
-  }, [isLandscape, vp]);
 
   const handleRemoteTermination = useCallback(() => {
     setTimeout(() => {
@@ -161,68 +134,16 @@ function StreamPage() {
   }, [connectionStatus]);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    function updateOrientation() {
+      alert("Rotated");
+      setOrientation(window.screen.orientation.type);
+    }
 
-    const readViewport = () => {
-      // visualViewport is best on mobile; fallback to innerWidth/innerHeight
-      const w = Math.round(window.visualViewport?.width ?? window.innerWidth);
-      const h = Math.round(window.visualViewport?.height ?? window.innerHeight);
-      setVp({ w, h });
-    };
-
-    readViewport();
-    window.addEventListener("resize", readViewport);
-    window.addEventListener("orientationchange", readViewport);
-    window.visualViewport?.addEventListener?.("resize", readViewport);
+    updateOrientation();
+    window.addEventListener("orientationchange", updateOrientation);
 
     return () => {
-      window.removeEventListener("resize", readViewport);
-      window.removeEventListener("orientationchange", readViewport);
-      window.visualViewport?.removeEventListener?.("resize", readViewport);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const mq = window.matchMedia?.("(orientation: landscape)");
-
-    const compute = () => {
-      const byMQ = mq?.matches ?? false;
-
-      // iOS Safari/PWA fallback
-      const byLegacy =
-        typeof (window as any).orientation === "number" &&
-        Math.abs((window as any).orientation) === 90;
-
-      // Android/modern fallback
-      const byScreen =
-        !!window.screen?.orientation?.type &&
-        window.screen.orientation.type.startsWith("landscape");
-
-      setIsLandscape(byMQ || byLegacy || byScreen);
-    };
-
-    compute();
-
-    // listeners (cover most browsers)
-    window.addEventListener("resize", compute);
-    window.addEventListener("orientationchange", compute);
-
-    if (mq?.addEventListener) mq.addEventListener("change", compute);
-    // old Safari
-    else if (mq?.addListener) mq.addListener(compute);
-
-    window.screen?.orientation?.addEventListener?.("change", compute);
-
-    return () => {
-      window.removeEventListener("resize", compute);
-      window.removeEventListener("orientationchange", compute);
-
-      if (mq?.removeEventListener) mq.removeEventListener("change", compute);
-      else if (mq?.removeListener) mq.removeListener(compute);
-
-      window.screen?.orientation?.removeEventListener?.("change", compute);
+      window.removeEventListener("orientationchange", updateOrientation);
     };
   }, []);
 
@@ -258,184 +179,177 @@ function StreamPage() {
   }, [stopStream, router]);
 
   return (
-    <section className="relative w-screen h-screen overflow-hidden">
-      <div style={stageStyle} className="relative">
-        {isLoadingMedia && (
-          <div className="absolute inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 pointer-events-none">
-            <div className="text-white text-2xl">Loading Media...</div>
-          </div>
-        )}
+    <section className="relative w-screen h-screen">
+      {isLoadingMedia && (
+        <div className="absolute inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 pointer-events-none">
+          <div className="text-white text-2xl">Loading Media...</div>
+        </div>
+      )}
 
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          controls={false}
-          onDoubleClick={async () => {
-            const newTrack = await flipCamera();
-            if (newTrack && isStreamOn) {
-              replaceTrack("video", newTrack);
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        controls={false}
+        onDoubleClick={async () => {
+          const newTrack = await flipCamera();
+          if (newTrack && isStreamOn) {
+            replaceTrack("video", newTrack);
+          }
+        }}
+        style={{
+          transform: isFrontCamera ? "scaleX(-1)" : "scaleX(1)",
+          transition: "opacity 0.3s ease",
+        }}
+        className="absolute inset-0 w-full h-full object-cover z-0"
+      />
+
+      {errorMessage && (
+        <div className="absolute top-24 left-0 right-0 flex justify-center animate-pulse z-20">
+          <div className="bg-red-500 text-white px-4 py-2 rounded-md flex items-center">
+            <span>{errorMessage}</span>
+            <button
+              className="ml-2"
+              onClick={() => {
+                /* Clear all errors if needed */
+              }}
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div
+        className={`absolute top-16 right-4 flex items-center ${
+          connectionStatus === "connected"
+            ? "text-green-500"
+            : connectionStatus === "connecting"
+            ? "text-yellow-500"
+            : connectionStatus === "disconnected"
+            ? "text-gray-500"
+            : "text-red-500"
+        }`}
+      >
+        <span className="material-symbols-outlined">
+          {icons.connection[connectionStatus]}
+        </span>
+        <span className="ml-2">
+          {connectionStatus.charAt(0).toUpperCase() + connectionStatus.slice(1)}
+        </span>
+      </div>
+
+      {sessionCode && (
+        <div className="absolute top-16 left-4 bg-black bg-opacity-50 text-white px-3 py-1 rounded-md">
+          Code: {sessionCode}
+        </div>
+      )}
+
+      {/* Overlay setting buttons */}
+      <div className="flex flex-col items-center inset-0 z-1">
+        {/* Top settings */}
+        <header className="flex fixed top-0 w-screen py-5 justify-evenly z-1">
+          {/* Back Button */}
+          <button onClick={handleBack} className="p-3" aria-label="Return">
+            <span className="material-symbols-outlined">keyboard_return</span>
+          </button>
+          {/* FPS Button */}
+          <button
+            onClick={() => handleVideoSettings(fps === "30" ? "60" : "30")}
+            className="p-3"
+            aria-label="Toggle FPS"
+          >
+            <span className="material-symbols-outlined">{icons.fps[fps]}</span>
+          </button>
+          {/* Portrait Mode Button */}
+          <button className="p-3" aria-label="Portrait Mode">
+            <span className="material-symbols-outlined">frame_person</span>
+          </button>
+          {/* Exposure Button */}
+          <button
+            onClick={() =>
+              handleVideoSettings(undefined, undefined, (exposure + 1) % 3)
             }
-          }}
-          style={{
-            transform: isFrontCamera ? "scaleX(-1)" : "scaleX(1)",
-            transition: "opacity 0.3s ease",
-          }}
-          className="absolute inset-0 w-full h-full object-cover z-0"
-        />
-
-        {errorMessage && (
-          <div className="absolute top-24 left-0 right-0 flex justify-center animate-pulse z-20">
-            <div className="bg-red-500 text-white px-4 py-2 rounded-md flex items-center">
-              <span>{errorMessage}</span>
-              <button
-                className="ml-2"
-                onClick={() => {
-                  /* Clear all errors if needed */
-                }}
-              >
-                ✕
-              </button>
-            </div>
-          </div>
-        )}
-
-        <div
-          className={`absolute top-16 right-4 flex items-center ${
-            connectionStatus === "connected"
-              ? "text-green-500"
-              : connectionStatus === "connecting"
-              ? "text-yellow-500"
-              : connectionStatus === "disconnected"
-              ? "text-gray-500"
-              : "text-red-500"
-          }`}
-        >
-          <span className="material-symbols-outlined">
-            {icons.connection[connectionStatus]}
-          </span>
-          <span className="ml-2">
-            {connectionStatus.charAt(0).toUpperCase() +
-              connectionStatus.slice(1)}
-          </span>
-        </div>
-
-        {sessionCode && (
-          <div className="absolute top-16 left-4 bg-black bg-opacity-50 text-white px-3 py-1 rounded-md">
-            Code: {sessionCode}
-          </div>
-        )}
-
-        {/* Overlay setting buttons */}
-        <div className="absolute inset-0 flex flex-col items-center z-10">
-          {/* Top settings */}
-          <header className="flex absolute top-0 left-0 right-0 w-full py-5 justify-evenly z-10">
-            {/* Back Button */}
-            <button onClick={handleBack} className="p-3" aria-label="Return">
-              <span className="material-symbols-outlined">keyboard_return</span>
-            </button>
-            {/* FPS Button */}
+            className="p-3"
+            aria-label="Adjust Exposure"
+          >
+            <span className="material-symbols-outlined">exposure</span>
+          </button>
+          {/* Resolution Button */}
+          <button
+            onClick={() =>
+              handleVideoSettings(
+                undefined,
+                resolution === "sd" ? "hd" : resolution === "hd" ? "4k" : "sd"
+              )
+            }
+            className="p-3"
+            aria-label="Toggle Resolution"
+          >
+            <span className="material-symbols-outlined">
+              {icons.resolution[resolution]}
+            </span>
+          </button>
+        </header>
+        {/* Bottom settings */}
+        <footer className="flex flex-col fixed bottom-0 w-screen py-10 justify-evenly z-1">
+          {/* Noise Level Indicator */}
+          {isMicOn === "on" && media && media.getAudioTracks().length > 0 && (
+            <React.Suspense fallback={<div>Loading Mic Volume...</div>}>
+              <AudioVolumeIndicator isEnabled={true} mediaStream={media} />
+            </React.Suspense>
+          )}
+          <div className="flex flex-row w-full justify-evenly">
+            {/* Mic Button */}
             <button
-              onClick={() => handleVideoSettings(fps === "30" ? "60" : "30")}
-              className="p-3"
-              aria-label="Toggle FPS"
+              onClick={toggleMic}
+              className="p-3 w-15 h-15 flex items-center justify-center"
+              aria-label={
+                isMicOn === "on" ? "Mute Microphone" : "Unmute Microphone"
+              }
             >
-              <span className="material-symbols-outlined">
-                {icons.fps[fps]}
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: "40px" }}
+              >
+                {icons.microphone[isMicOn]}
               </span>
             </button>
-            {/* Portrait Mode Button */}
-            <button className="p-3" aria-label="Portrait Mode">
-              <span className="material-symbols-outlined">frame_person</span>
-            </button>
-            {/* Exposure Button */}
+            {/* Stream Button */}
             <button
-              onClick={() =>
-                handleVideoSettings(undefined, undefined, (exposure + 1) % 3)
-              }
-              className="p-3"
-              aria-label="Adjust Exposure"
+              onClick={isStreamOn ? stopStream : startStream}
+              className={`p-3 w-15 h-15 flex items-center justify-center ${
+                isStreamOn
+                  ? "text-red-500"
+                  : connectionStatus === "connecting"
+                  ? "text-yellow-500"
+                  : "text-green-500"
+              }`}
+              aria-label={isStreamOn ? "Stop Streaming" : "Start Streaming"}
             >
-              <span className="material-symbols-outlined">exposure</span>
-            </button>
-            {/* Resolution Button */}
-            <button
-              onClick={() =>
-                handleVideoSettings(
-                  undefined,
-                  resolution === "sd" ? "hd" : resolution === "hd" ? "4k" : "sd"
-                )
-              }
-              className="p-3"
-              aria-label="Toggle Resolution"
-            >
-              <span className="material-symbols-outlined">
-                {icons.resolution[resolution]}
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: "80px" }}
+              >
+                {isStreamOn ? "radio_button_checked" : "radio_button_unchecked"}
               </span>
             </button>
-          </header>
-          {/* Bottom settings */}
-          <footer className="flex flex-col absolute bottom-0 left-0 right-0 w-full py-10 justify-evenly z-10">
-            {/* Noise Level Indicator */}
-            {isMicOn === "on" && media && media.getAudioTracks().length > 0 && (
-              <React.Suspense fallback={<div>Loading Mic Volume...</div>}>
-                <AudioVolumeIndicator isEnabled={true} mediaStream={media} />
-              </React.Suspense>
-            )}
-            <div className="flex flex-row w-full justify-evenly">
-              {/* Mic Button */}
-              <button
-                onClick={toggleMic}
-                className="p-3 w-15 h-15 flex items-center justify-center"
-                aria-label={
-                  isMicOn === "on" ? "Mute Microphone" : "Unmute Microphone"
-                }
+            {/* Video Button */}
+            <button
+              onClick={toggleVideo}
+              className="p-3 w-15 h-15 flex items-center justify-center"
+              aria-label={isVidOn === "on" ? "Stop Video" : "Start Video"}
+            >
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: "40px" }}
               >
-                <span
-                  className="material-symbols-outlined"
-                  style={{ fontSize: "40px" }}
-                >
-                  {icons.microphone[isMicOn]}
-                </span>
-              </button>
-              {/* Stream Button */}
-              <button
-                onClick={isStreamOn ? stopStream : startStream}
-                className={`p-3 w-15 h-15 flex items-center justify-center ${
-                  isStreamOn
-                    ? "text-red-500"
-                    : connectionStatus === "connecting"
-                    ? "text-yellow-500"
-                    : "text-green-500"
-                }`}
-                aria-label={isStreamOn ? "Stop Streaming" : "Start Streaming"}
-              >
-                <span
-                  className="material-symbols-outlined"
-                  style={{ fontSize: "80px" }}
-                >
-                  {isStreamOn
-                    ? "radio_button_checked"
-                    : "radio_button_unchecked"}
-                </span>
-              </button>
-              {/* Video Button */}
-              <button
-                onClick={toggleVideo}
-                className="p-3 w-15 h-15 flex items-center justify-center"
-                aria-label={isVidOn === "on" ? "Stop Video" : "Start Video"}
-              >
-                <span
-                  className="material-symbols-outlined"
-                  style={{ fontSize: "40px" }}
-                >
-                  {icons.video[isVidOn]}
-                </span>
-              </button>
-            </div>
-          </footer>
-        </div>
+                {icons.video[isVidOn]}
+              </span>
+            </button>
+          </div>
+        </footer>
       </div>
     </section>
   );
