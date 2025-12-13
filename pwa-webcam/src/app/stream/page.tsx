@@ -55,34 +55,43 @@ function StreamPage() {
   const initialMic = mic;
 
   const [resolution, setResolution] = useState<"sd" | "hd" | "4k">("hd");
-  const [isLandscape, setIsLandscape] = useState(false);
   const [fps, setFps] = useState<"30" | "60">("60");
   const [exposure, setExposure] = useState(0);
 
+  const [isLandscape, setIsLandscape] = useState(false);
+  const [vp, setVp] = useState({ w: 0, h: 0 });
+
   const stageStyle = useMemo<React.CSSProperties>(() => {
+    const w = vp.w || 1;
+    const h = vp.h || 1;
+
     if (!isLandscape) {
       return {
         position: "absolute",
-        inset: 0,
-        width: "100vw",
-        height: "100vh",
+        top: 0,
+        left: 0,
+        width: w,
+        height: h,
       };
     }
 
-    // Rotate the whole stage 90° clockwise inside a portrait-locked viewport
+    // After rotate(90deg) about top-left, the content sits above the screen (negative Y).
+    // translateY(h) moves it down into view.
     return {
       position: "absolute",
-      top: "100%", // key: shifts it into view after rotation
+      top: 0,
       left: 0,
-      width: "100vh", // swap dimensions
-      height: "100vw",
-      transform: "rotate(90deg)",
+      width: h, // swapped
+      height: w, // swapped
       transformOrigin: "top left",
+      transform: `translateY(${h}px) rotate(90deg)`,
     };
-  }, [isLandscape]);
+  }, [isLandscape, vp]);
 
   const handleRemoteTermination = useCallback(() => {
-    router.push("/");
+    setTimeout(() => {
+      router.push("/");
+    }, 1500);
   }, [router]);
 
   // -- Media Stream Hook --
@@ -150,6 +159,28 @@ function StreamPage() {
       stopMedia();
     }
   }, [connectionStatus]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const readViewport = () => {
+      // visualViewport is best on mobile; fallback to innerWidth/innerHeight
+      const w = Math.round(window.visualViewport?.width ?? window.innerWidth);
+      const h = Math.round(window.visualViewport?.height ?? window.innerHeight);
+      setVp({ w, h });
+    };
+
+    readViewport();
+    window.addEventListener("resize", readViewport);
+    window.addEventListener("orientationchange", readViewport);
+    window.visualViewport?.addEventListener?.("resize", readViewport);
+
+    return () => {
+      window.removeEventListener("resize", readViewport);
+      window.removeEventListener("orientationchange", readViewport);
+      window.visualViewport?.removeEventListener?.("resize", readViewport);
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -227,7 +258,7 @@ function StreamPage() {
   }, [stopStream, router]);
 
   return (
-    <section className="relative w-screen h-screen">
+    <section className="relative w-screen h-screen overflow-hidden">
       <div style={stageStyle} className="relative">
         {isLoadingMedia && (
           <div className="absolute inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 pointer-events-none">
@@ -297,7 +328,7 @@ function StreamPage() {
         )}
 
         {/* Overlay setting buttons */}
-        <div className="flex flex-col items-center inset-0 z-1">
+        <div className="absolute inset-0 flex flex-col items-center z-10">
           {/* Top settings */}
           <header className="flex absolute top-0 left-0 right-0 w-full py-5 justify-evenly z-10">
             {/* Back Button */}
