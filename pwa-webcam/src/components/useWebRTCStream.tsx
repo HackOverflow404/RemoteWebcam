@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
+import { createMirroredTrack } from "@/lib/videoTransforms";
 
 export type ConnectionState =
   | "connecting"
@@ -137,7 +138,16 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       dcRef.current = dc;
 
       media.getTracks().forEach((track) => {
-        pc.addTrack(track, media);
+        if (track.kind === "video") {
+          const processedTrack = createMirroredTrack(
+            track,
+            propsRef.current.isFrontCamera
+          );
+
+          pc.addTrack(processedTrack, media);
+        } else {
+          pc.addTrack(track, media);
+        }
       });
 
       await pc.setLocalDescription(await pc.createOffer());
@@ -199,10 +209,19 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
 
       const sender = pc.getSenders().find((s) => s.track?.kind === kind);
 
+      let outgoingTrack = track;
+
+      if (kind === "video" && track) {
+        outgoingTrack = createMirroredTrack(
+          track,
+          propsRef.current.isFrontCamera
+        );
+      }
+
       if (sender) {
-        await sender.replaceTrack(track);
-      } else if (track) {
-        pc.addTrack(track, propsRef.current.media!);
+        await sender.replaceTrack(outgoingTrack);
+      } else if (outgoingTrack) {
+        pc.addTrack(outgoingTrack, propsRef.current.media!);
       }
     },
     []
