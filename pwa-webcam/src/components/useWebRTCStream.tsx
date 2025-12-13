@@ -19,6 +19,7 @@ export interface UseWebRTCStreamProps {
   exposure: number;
   startMedia: () => void;
   stopMedia: () => void;
+  handleRemoteTermination: (remoteTermination: boolean) => void;
 }
 
 export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
@@ -61,6 +62,9 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
 
     setOn(false);
     setStatus("disconnected");
+    if (reason == "remote-linux-termination") {
+      propsRef.current.handleRemoteTermination(true);
+    }
   }, []);
 
   async function fetchIceServers() {

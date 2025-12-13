@@ -58,6 +58,10 @@ function StreamPage() {
   const [resolution, setResolution] = useState<"sd" | "hd" | "4k">("hd");
   const [exposure, setExposure] = useState(0);
 
+  const handleRemoteTermination = useCallback(() => {
+    router.push("/");
+  }, [router]);
+
   // -- Media Stream Hook --
   const {
     videoRef,
@@ -100,6 +104,7 @@ function StreamPage() {
     exposure,
     startMedia,
     stopMedia,
+    handleRemoteTermination,
   });
 
   // --- Combine errors for prioritized display ---
