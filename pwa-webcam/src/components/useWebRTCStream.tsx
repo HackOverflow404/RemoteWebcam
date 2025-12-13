@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { createMirroredTrack } from "@/lib/videoTransforms";
+import { createMirroredTrack, ProcessedTrack } from "@/lib/videoTransforms";
 
 export type ConnectionState =
   | "connecting"
@@ -31,8 +31,8 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
 
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
-  const pollingRef = useRef(false);
   const startedRef = useRef(false);
+  const processedVideoRef = useRef<ProcessedTrack | null>(null);
 
   const [status, setStatus] = useState<ConnectionState>("disconnected");
   const [error, setError] = useState<string | null>(null);
@@ -61,8 +61,11 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       peerRef.current = null;
     }
 
+    cleanupProcessedVideo();
+
     setOn(false);
     setStatus("disconnected");
+    
     if (reason == "remote-linux-termination") {
       propsRef.current.handleRemoteTermination(true);
     }
@@ -139,12 +142,15 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
 
       media.getTracks().forEach((track) => {
         if (track.kind === "video") {
-          const processedTrack = createMirroredTrack(
+          cleanupProcessedVideo();
+
+          const processed = createMirroredTrack(
             track,
             propsRef.current.isFrontCamera
           );
 
-          pc.addTrack(processedTrack, media);
+          processedVideoRef.current = processed;
+          pc.addTrack(processed.track, media);
         } else {
           pc.addTrack(track, media);
         }
@@ -208,24 +214,37 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       if (!pc) return;
 
       const sender = pc.getSenders().find((s) => s.track?.kind === kind);
+      if (!sender) return;
 
-      let outgoingTrack = track;
+      if (kind === "video") {
+        cleanupProcessedVideo();
 
-      if (kind === "video" && track) {
-        outgoingTrack = createMirroredTrack(
+        if (!track) {
+          await sender.replaceTrack(null);
+          return;
+        }
+
+        const processed = createMirroredTrack(
           track,
           propsRef.current.isFrontCamera
         );
+
+        processedVideoRef.current = processed;
+        await sender.replaceTrack(processed.track);
+        return;
       }
 
-      if (sender) {
-        await sender.replaceTrack(outgoingTrack);
-      } else if (outgoingTrack) {
-        pc.addTrack(outgoingTrack, propsRef.current.media!);
-      }
+      await sender.replaceTrack(track);
     },
     []
   );
+
+  function cleanupProcessedVideo() {
+    if (processedVideoRef.current) {
+      processedVideoRef.current.stop();
+      processedVideoRef.current = null;
+    }
+  }
 
   return {
     isStreamOn: on,

@@ -54,6 +54,7 @@ function StreamPage() {
   const initialWebcam = webcam;
   const initialMic = mic;
 
+  const [orientation, setOrientation] = useState<OrientationType>(window.screen.orientation.type);
   const [fps, setFps] = useState<"30" | "60">("60");
   const [resolution, setResolution] = useState<"sd" | "hd" | "4k">("hd");
   const [exposure, setExposure] = useState(0);
@@ -127,6 +128,19 @@ function StreamPage() {
       stopMedia();
     }
   }, [connectionStatus]);
+
+  useEffect(() => {
+    function updateOrientation() {
+      setOrientation(window.screen.orientation.type);
+    }
+    
+    updateOrientation();
+    window.addEventListener("orientationchange", updateOrientation);
+    
+    return () => {
+      window.removeEventListener("orientationchange", updateOrientation);
+    };
+  }, [orientation]);
 
   // --- Unified video settings handler ---
   const handleVideoSettings = useCallback(
