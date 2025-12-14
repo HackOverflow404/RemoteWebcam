@@ -316,7 +316,6 @@ function StreamPage() {
               ? "text-gray-500"
               : "text-red-500"
           }`}
-          style={{ transform: `rotate(-${rotateDeg}deg)` }}
         >
           <span className="material-symbols-outlined">
             {icons.connection[connectionStatus]}
