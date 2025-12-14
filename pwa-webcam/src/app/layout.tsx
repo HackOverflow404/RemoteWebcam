@@ -25,7 +25,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
                 <link rel="manifest" href="/manifest.webmanifest" />
                 <meta name="theme-color" content="#0a0a0a" />
                 <link rel="apple-touch-icon" href="/icons/icon-192x192.png" />
-                <meta name="viewport" content="width=device-width, initial-scale=1" />
+                <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
             </head>
             <body className="antialiased">
                 <SWRegister />
