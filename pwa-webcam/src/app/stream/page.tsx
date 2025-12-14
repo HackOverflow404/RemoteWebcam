@@ -209,8 +209,7 @@ function StreamPage() {
       };
     }
 
-    // When rotated, the stage logical dims swap.
-    // Correct translation depends on rotation direction.
+    // dims swap in landscape
     if (rotateDeg === 90) {
       return {
         position: "absolute",
@@ -219,8 +218,8 @@ function StreamPage() {
         width: h,
         height: w,
         transformOrigin: "top left",
-        // rotate first -> content goes into negative X, so push it back by +w
-        transform: `translateX(${w}px) rotate(90deg)`,
+        // After rotate(90), content sits in negative Y -> push DOWN by +h
+        transform: `translateY(${h}px) rotate(90deg)`,
       };
     }
 
@@ -232,8 +231,8 @@ function StreamPage() {
       width: h,
       height: w,
       transformOrigin: "top left",
-      // rotate first -> content goes into negative Y, so push it back by +h
-      transform: `translateY(${h}px) rotate(-90deg)`,
+      // After rotate(-90), content sits in negative X -> push RIGHT by +w
+      transform: `translateX(${w}px) rotate(-90deg)`,
     };
   }, [vp, rotateDeg]);
 
@@ -307,7 +306,7 @@ function StreamPage() {
         )}
 
         <div
-          className={`absolute top-16 right-4 flex items-center z-20 ${
+          className={`absolute top-20 right-4 flex items-center z-20 ${
             connectionStatus === "connected"
               ? "text-green-500"
               : connectionStatus === "connecting"
