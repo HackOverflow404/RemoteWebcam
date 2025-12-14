@@ -203,47 +203,31 @@ function StreamPage() {
 
   // Stage style: rotate the whole “surface” and translate it into view
   const stageStyle = useMemo<React.CSSProperties>(() => {
-    const w = vp.w;
-    const h = vp.h;
+    // Prefer dynamic viewport units when supported; fall back to vw/vh
+    const vw = "100dvw";
+    const vh = "100dvh";
 
     if (rotateDeg === 0) {
       return {
-        position: "absolute",
-        top: 0,
-        left: 0,
-        width: w,
-        height: h,
+        position: "fixed",
+        inset: 0,
+        width: vw,
+        height: vh,
         transform: "none",
-        transformOrigin: "top left",
       };
     }
 
-    // dims swap
-    if (rotateDeg === 90) {
-      return {
-        position: "absolute",
-        top: 0,
-        left: 0,
-        width: h,
-        height: w,
-        transformOrigin: "top left",
-        // key: pre-translate in % then rotate
-        transform: "rotate(90deg) translateY(-100%)",
-      };
-    }
-
-    // rotate -90
+    // In landscape, swap dims and rotate around the center
     return {
-      position: "absolute",
-      top: 0,
-      left: 0,
-      width: h,
-      height: w,
-      transformOrigin: "top left",
-      // key: pre-translate in % then rotate
-      transform: "rotate(-90deg) translateX(-100%)",
+      position: "fixed",
+      top: "50%",
+      left: "50%",
+      width: vh, // swapped
+      height: vw, // swapped
+      transformOrigin: "center",
+      transform: `translate(-50%, -50%) rotate(${rotateDeg}deg)`,
     };
-  }, [vp, rotateDeg]);
+  }, [rotateDeg]);
 
   // --- Unified video settings handler ---
   const handleVideoSettings = useCallback(
@@ -276,7 +260,7 @@ function StreamPage() {
 
   return (
     <section className="fixed inset-0 overflow-hidden bg-black">
-      <div style={stageStyle} className="relative overflow-hidden">
+      <div style={stageStyle}>
         {isLoadingMedia && (
           <div className="absolute inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 pointer-events-none">
             <div className="text-white text-2xl">Loading Media...</div>
