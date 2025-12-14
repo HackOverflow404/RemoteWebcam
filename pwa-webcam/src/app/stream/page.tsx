@@ -267,7 +267,7 @@ function StreamPage() {
   }, [stopStream, router]);
 
   return (
-    <section className="fixed inset-0 overflow-hidden bg-black">
+    <section className="fixed w-screen h-screen overflow-hidden">
       <div style={stageStyle} className="relative">
         {isLoadingMedia && (
           <div className="absolute inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 pointer-events-none">
