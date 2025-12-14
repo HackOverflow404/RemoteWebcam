@@ -15,9 +15,10 @@ import cv2
 from enum import Enum
 import json
 from collections import deque
-from virtual_camera import VirtualCamThread
+from virtual_devices import VirtualCamThread, VirtualMicThread
 import numpy as np
-
+from av import AudioFrame
+import queue
 
 class ConnectionState(Enum):
     CONNECTING = "connecting"
@@ -32,17 +33,25 @@ class WebRTCWorker(QObject):
 
     def __init__(self, code: str, widget_win_id: int):
         super().__init__()
-        self.pc = None
         self.loop = None
-        self.code = code
         self.running = False
-        self.track_task = None
-        self.last_preview_ts = 0
-        self.data_channels = set()
         self.shutting_down = False
+        
+        self.pc = None
+        self.code = code
+        self.data_channels = set()
+        
+        self.last_preview_ts = 0
+        self.video_track_task = None
+        self.VIRTUAL_CAM_WIDTH = 1280
+        self.VIRTUAL_CAM_HEIGHT = 720
         self.virtual_cam_thread = None
         self.preview_interval = 1 / 10
         self.frame_queue = deque(maxlen=2)
+        
+        self.audio_track_task = None
+        self.virtual_mic_thread = None
+        self.audio_queue = queue.Queue(maxsize=10)
 
         self.CHECK_OFFER_URL = "https://checkoffer-qaf2yvcrrq-uc.a.run.app"
         self.SUBMIT_ANSWER_URL = "https://submitanswer-qaf2yvcrrq-uc.a.run.app"
@@ -84,9 +93,13 @@ class WebRTCWorker(QObject):
         except Exception:
             pass
 
-        if self.track_task:
-            self.track_task.cancel()
-            self.track_task = None
+        if self.video_track_task:
+            self.video_track_task.cancel()
+            self.video_track_task = None
+        
+        if self.audio_track_task:
+            self.audio_track_task.cancel()
+            self.audio_track_task = None
 
         for ch in self.data_channels:
             try:
@@ -101,6 +114,7 @@ class WebRTCWorker(QObject):
 
         self.running = False
         self.virtual_cam_thread = None
+        self.virtual_mic_thread = None
         self.connection_state_changed.emit(ConnectionState.DISCONNECTED)
 
     # --------------------
@@ -143,15 +157,26 @@ class WebRTCWorker(QObject):
         @self.pc.on("track")
         def on_track(track):
             if track.kind == "video":
-                self.track_task = asyncio.create_task(self.handle_track(track))
+                self.video_track_task = asyncio.create_task(self.handle_video_track(track))
 
                 if not self.virtual_cam_thread:
                     self.virtual_cam_thread = VirtualCamThread(
                         frame_queue=self.frame_queue,
                         running_flag=lambda: self.running,
+                        width=self.VIRTUAL_CAM_WIDTH,
+                        height=self.VIRTUAL_CAM_HEIGHT,
                         fps=20,
                     )
                     self.virtual_cam_thread.start()
+            elif track.kind == "audio":
+                self.audio_track_task = asyncio.create_task(self.handle_audio_track(track))
+
+                if not self.virtual_mic_thread:
+                    self.virtual_mic_thread = VirtualMicThread(
+                        audio_queue=self.audio_queue,
+                        running_flag=lambda: self.running,
+                    )
+                    self.virtual_mic_thread.start()
 
         @self.pc.on("datachannel")
         def on_datachannel(channel):
@@ -250,7 +275,7 @@ class WebRTCWorker(QObject):
     # --------------------
     # TRACK HANDLER (FIXED)
     # --------------------
-    async def handle_track(self, track: MediaStreamTrack):
+    async def handle_video_track(self, track: MediaStreamTrack):
         try:
             while self.running:
                 frame = await track.recv()
@@ -259,15 +284,12 @@ class WebRTCWorker(QObject):
                     continue
 
                 img = frame.to_ndarray(format="bgr24")
-                
-                VIRTUAL_CAM_WIDTH = 1280
-                VIRTUAL_CAM_HEIGHT = 720
 
                 # Adaptive letterboxing to fixed output size
                 img = self.letterbox(
                     img,
-                    VIRTUAL_CAM_WIDTH,
-                    VIRTUAL_CAM_HEIGHT,
+                    self.VIRTUAL_CAM_WIDTH,
+                    self.VIRTUAL_CAM_HEIGHT,
                 )
 
                 # Non-blocking enqueue (always same shape now)
@@ -283,3 +305,33 @@ class WebRTCWorker(QObject):
             pass
         except Exception as e:
             print("Track recv error:", e)
+    
+    async def handle_audio_track(self, track: MediaStreamTrack):
+        try:
+            while self.running:
+                frame = await track.recv()
+
+                if not isinstance(frame, AudioFrame):
+                    continue
+
+                pcm = frame.to_ndarray()
+
+                # Shape normalization:
+                # aiortc gives (channels, samples)
+                if pcm.ndim == 2:
+                    pcm = pcm.T  # → (samples, channels)
+
+                # Convert int16 → float32 if needed
+                if pcm.dtype == np.int16:
+                    pcm = pcm.astype(np.float32) / 32768.0
+
+                # Enqueue non-blocking
+                try:
+                    self.audio_queue.put_nowait(pcm)
+                except queue.Full:
+                    pass
+
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            print("Audio track error:", e)
