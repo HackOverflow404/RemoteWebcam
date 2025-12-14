@@ -1,5 +1,9 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { createMirroredTrack, ProcessedTrack } from "@/lib/videoTransforms";
+import {
+  createMirroredTrack,
+  createLetterboxedTrack,
+  ProcessedTrack,
+} from "@/lib/videoTransforms";
 
 export type ConnectionState =
   | "connecting"
@@ -65,11 +69,44 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
 
     setOn(false);
     setStatus("disconnected");
-    
+
     if (reason == "remote-linux-termination") {
       propsRef.current.handleRemoteTermination(true);
     }
   }, []);
+
+  function getOutputDims(resolution: string) {
+    // Keep output constant so WebRTC never renegotiates on rotation.
+    switch (resolution) {
+      case "4k":
+        return { w: 3840, h: 2160 };
+      case "hd":
+        return { w: 1280, h: 720 };
+      case "sd":
+        return { w: 640, h: 480 };
+    }
+    return { w: 1280, h: 720 }; // hd default
+  }
+
+  function makeProcessedVideo(track: MediaStreamTrack): ProcessedTrack {
+    const { fps, isFrontCamera, resolution } = propsRef.current;
+    const { w, h } = getOutputDims(resolution);
+
+    // 1) mirror (front cam)
+    const mirrored = createMirroredTrack(track, isFrontCamera, fps);
+
+    // 2) letterbox into fixed output (bars disappear naturally when landscape fits)
+    const boxed = createLetterboxedTrack(mirrored.track, w, h, fps, "black");
+
+    // Combine cleanup so replace/stop kills only the processing pipeline
+    return {
+      track: boxed.track,
+      stop: () => {
+        boxed.stop();
+        mirrored.stop();
+      },
+    };
+  }
 
   async function fetchIceServers() {
     const resp = await fetch(
@@ -125,7 +162,12 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       };
 
       const dc = pc.createDataChannel("chat");
-      dc.onopen = () => dc.send("Hello from JS!");
+      dc.onopen = () => {
+        dc.send("Hello from JS!");
+        const { resolution } = propsRef.current;
+        const { w, h } = getOutputDims(resolution);
+        dc.send(JSON.stringify({ type: "dimensions", width: w, height: h }));
+      };
       dc.onmessage = (e) => {
         try {
           const msg = JSON.parse(e.data);
@@ -144,13 +186,11 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
         if (track.kind === "video") {
           cleanupProcessedVideo();
 
-          const processed = createMirroredTrack(
-            track,
-            propsRef.current.isFrontCamera
-          );
-
+          const processed = makeProcessedVideo(track);
           processedVideoRef.current = processed;
-          pc.addTrack(processed.track, media);
+
+          // Use a dedicated stream for the processed track
+          pc.addTrack(processed.track, new MediaStream([processed.track]));
         } else {
           pc.addTrack(track, media);
         }
@@ -224,12 +264,9 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
           return;
         }
 
-        const processed = createMirroredTrack(
-          track,
-          propsRef.current.isFrontCamera
-        );
-
+        const processed = makeProcessedVideo(track);
         processedVideoRef.current = processed;
+
         await sender.replaceTrack(processed.track);
         return;
       }

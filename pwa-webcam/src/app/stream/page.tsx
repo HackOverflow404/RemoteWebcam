@@ -231,7 +231,7 @@ function StreamPage() {
 
   // --- Unified video settings handler ---
   const handleVideoSettings = useCallback(
-    (
+    async (
       newFps?: "30" | "60",
       newRes?: "sd" | "hd" | "4k",
       newExposure?: number
@@ -241,11 +241,15 @@ function StreamPage() {
       if (typeof newExposure === "number") setExposure(newExposure);
 
       if (updateConstraints) {
-        updateConstraints({
+        const newTrack = await updateConstraints({
           fps: newFps || fps,
           resolution: newRes || resolution,
           exposure: typeof newExposure === "number" ? newExposure : exposure,
         });
+
+        if (replaceTrack && newTrack && isStreamOn) {
+          replaceTrack("video", newTrack);
+        }
       } else {
         if (isVidOn && media) setTimeout(toggleVideo, 100);
       }
