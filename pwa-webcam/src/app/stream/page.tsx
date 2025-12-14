@@ -144,21 +144,29 @@ function StreamPage() {
     const computeRotation = (w: number, h: number) => {
       const isLandscape = mq?.matches ?? w > h;
 
-      // Best-effort angle detection across browsers
-      const screenAngle = (window.screen?.orientation?.angle ?? 0) as number;
-      const legacyAngle =
-        typeof (window as any).orientation === "number"
-          ? (window as any).orientation
-          : 0;
-
-      const angle = screenAngle || legacyAngle || 0;
-
       if (!isLandscape) {
         setRotateDeg(0);
         return;
       }
 
-      // angle could be 90, -90, 270 (iOS)
+      const type = window.screen?.orientation?.type; // best signal when available
+      if (type === "landscape-secondary") {
+        setRotateDeg(-90);
+        return;
+      }
+      if (type === "landscape-primary") {
+        setRotateDeg(90);
+        return;
+      }
+
+      // fallback: angle
+      const screenAngle = (window.screen?.orientation?.angle ?? 0) as number;
+      const legacyAngle =
+        typeof (window as any).orientation === "number"
+          ? (window as any).orientation
+          : 0;
+      const angle = screenAngle || legacyAngle || 0;
+
       if (angle === -90 || angle === 270) setRotateDeg(-90);
       else setRotateDeg(90);
     };
@@ -194,7 +202,6 @@ function StreamPage() {
   }, []);
 
   // Stage style: rotate the whole “surface” and translate it into view
-  // Stage style: rotate the whole “surface” and translate it into view
   const stageStyle = useMemo<React.CSSProperties>(() => {
     const w = vp.w;
     const h = vp.h;
@@ -206,11 +213,12 @@ function StreamPage() {
         left: 0,
         width: w,
         height: h,
+        transform: "none",
+        transformOrigin: "top left",
       };
     }
 
-    // When rotated, the stage logical dims swap.
-    // Correct translation depends on rotation direction.
+    // dims swap
     if (rotateDeg === 90) {
       return {
         position: "absolute",
@@ -219,8 +227,8 @@ function StreamPage() {
         width: h,
         height: w,
         transformOrigin: "top left",
-        // rotate first -> content goes into negative X, so push it back by +w
-        transform: `translateX(${w}px) rotate(90deg)`,
+        // key: pre-translate in % then rotate
+        transform: "rotate(90deg) translateY(-100%)",
       };
     }
 
@@ -232,8 +240,8 @@ function StreamPage() {
       width: h,
       height: w,
       transformOrigin: "top left",
-      // rotate first -> content goes into negative Y, so push it back by +h
-      transform: `translateY(${h}px) rotate(-90deg)`,
+      // key: pre-translate in % then rotate
+      transform: "rotate(-90deg) translateX(-100%)",
     };
   }, [vp, rotateDeg]);
 
