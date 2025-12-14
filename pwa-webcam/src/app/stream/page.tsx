@@ -136,8 +136,8 @@ function StreamPage() {
     const mq = window.matchMedia?.("(orientation: landscape)");
 
     const readViewport = () => {
-      const w = Math.round(window.visualViewport?.width ?? window.innerWidth);
-      const h = Math.round(window.visualViewport?.height ?? window.innerHeight);
+      const w = Math.round(window.innerWidth);
+      const h = Math.round(window.innerHeight);
       return { w: w || 1, h: h || 1 };
     };
 
@@ -267,8 +267,8 @@ function StreamPage() {
   }, [stopStream, router]);
 
   return (
-    <section className="fixed w-screen h-screen overflow-hidden">
-      <div style={stageStyle} className="relative w-screen h-screen overflow-hidden">
+    <section className="fixed inset-0 overflow-hidden bg-black">
+      <div style={stageStyle} className="relative overflow-hidden">
         {isLoadingMedia && (
           <div className="absolute inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 pointer-events-none">
             <div className="text-white text-2xl">Loading Media...</div>
