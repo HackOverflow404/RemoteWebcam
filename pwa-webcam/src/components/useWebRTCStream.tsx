@@ -2,7 +2,9 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import {
   createMirroredTrack,
   createLetterboxedTrack,
+  createRotatedTrack,
   ProcessedTrack,
+  Rotation,
 } from "@/lib/videoTransforms";
 
 export type ConnectionState =
@@ -36,6 +38,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
   const startedRef = useRef(false);
+  const rotationRef = useRef<Rotation>(0);
   const processedVideoRef = useRef<ProcessedTrack | null>(null);
 
   const [status, setStatus] = useState<ConnectionState>("disconnected");
@@ -88,22 +91,70 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     return { w: 1280, h: 720 }; // hd default
   }
 
+  const handleRotate = useCallback(async (w: number, h: number) => {
+    const pc = peerRef.current;
+    const media = propsRef.current.media;
+
+    if (!pc || !media) return;
+
+    const sourceTrack = media.getVideoTracks()[0];
+    if (!sourceTrack) return;
+
+    const settings = sourceTrack.getSettings();
+    const tw = settings.width ?? 0;
+    const th = settings.height ?? 0;
+
+    const wantLandscape = w > h;
+
+    // Decide if we need to rotate based on what the camera is *actually* outputting.
+    // If camera frames are portrait but UI is landscape => rotate 90.
+    // If camera frames are landscape but UI is portrait => rotate -90.
+    let nextRot: Rotation = 0;
+
+    if (tw && th) {
+      const trackIsLandscape = tw > th;
+
+      if (wantLandscape && !trackIsLandscape) nextRot = 90;
+      else if (!wantLandscape && trackIsLandscape) nextRot = -90;
+    } else {
+      // Fallback: if we can’t read track dims, don’t thrash.
+      nextRot = wantLandscape ? 90 : 0;
+    }
+
+    if (rotationRef.current === nextRot) return; // no-op
+    rotationRef.current = nextRot;
+
+    // Only do the expensive rebuild if we are actively streaming
+    const sender = pc.getSenders().find((s) => s.track?.kind === "video");
+    if (!sender) return;
+
+    cleanupProcessedVideo();
+
+    const processed = makeProcessedVideo(sourceTrack);
+    processedVideoRef.current = processed;
+
+    await sender.replaceTrack(processed.track);
+  }, []);
+
   function makeProcessedVideo(track: MediaStreamTrack): ProcessedTrack {
     const { fps, isFrontCamera, resolution } = propsRef.current;
     const { w, h } = getOutputDims(resolution);
+    const rot = rotationRef.current;
 
-    // 1) mirror (front cam)
-    const mirrored = createMirroredTrack(track, isFrontCamera, fps);
+    // Rotate first (so “mirror horizontally” is correct in final orientation)
+    const rotated = createRotatedTrack(track, rot, fps, "black");
 
-    // 2) letterbox into fixed output (bars disappear naturally when landscape fits)
+    const mirrored = createMirroredTrack(rotated.track, isFrontCamera, fps);
+
+    // Letterbox into fixed output; in landscape it will fill and effectively show no bars
     const boxed = createLetterboxedTrack(mirrored.track, w, h, fps, "black");
 
-    // Combine cleanup so replace/stop kills only the processing pipeline
     return {
       track: boxed.track,
       stop: () => {
         boxed.stop();
         mirrored.stop();
+        rotated.stop();
       },
     };
   }
@@ -287,6 +338,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     isStreamOn: on,
     connectionStatus: status,
     error,
+    handleRotate,
     replaceTrack,
     startStream,
     stopStream,

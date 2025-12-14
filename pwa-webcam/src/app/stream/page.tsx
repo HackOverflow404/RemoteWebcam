@@ -95,6 +95,7 @@ function StreamPage() {
     startStream,
     stopStream,
     replaceTrack,
+    handleRotate,
     isStreamOn,
     connectionStatus,
     error: RTCStreamError,
@@ -135,14 +136,15 @@ function StreamPage() {
 
     const mq = window.matchMedia?.("(orientation: landscape)");
 
-    const readViewport = () => {
+    const recompute = () => {
       const w = Math.round(window.innerWidth);
       const h = Math.round(window.innerHeight);
-      return { w: w || 1, h: h || 1 };
-    };
 
-    const computeRotation = (w: number, h: number) => {
+      setVp({ w, h });
+
       const isLandscape = mq?.matches ?? w > h;
+
+      handleRotate( w, h);
 
       if (!isLandscape) {
         setRotateDeg(0);
@@ -169,12 +171,6 @@ function StreamPage() {
 
       if (angle === -90 || angle === 270) setRotateDeg(-90);
       else setRotateDeg(90);
-    };
-
-    const recompute = () => {
-      const { w, h } = readViewport();
-      setVp({ w, h });
-      computeRotation(w, h);
     };
 
     recompute();
