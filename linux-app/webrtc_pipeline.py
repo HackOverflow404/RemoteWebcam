@@ -195,6 +195,9 @@ class WebRTCWorker(QObject):
 
                 if data.get("type") == "terminate":
                     await self._shutdown()
+                if data.get("type") == "dimensions":
+                    self.VIRTUAL_CAM_WIDTH = data.get("width")
+                    self.VIRTUAL_CAM_HEIGHT = data.get("height")
 
         await self.pc.setRemoteDescription(offer)
         answer = await self.pc.createAnswer()
@@ -254,23 +257,6 @@ class WebRTCWorker(QObject):
                 )
             )
         return RTCConfiguration(iceServers=servers)
-    
-    def letterbox(self, img, out_w, out_h):
-        h, w = img.shape[:2]
-
-        scale = min(out_w / w, out_h / h)
-        new_w = int(w * scale)
-        new_h = int(h * scale)
-
-        resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
-
-        canvas = np.zeros((out_h, out_w, 3), dtype=np.uint8)
-
-        x_off = (out_w - new_w) // 2
-        y_off = (out_h - new_h) // 2
-
-        canvas[y_off:y_off + new_h, x_off:x_off + new_w] = resized
-        return canvas
 
     # --------------------
     # TRACK HANDLER (FIXED)
@@ -284,13 +270,6 @@ class WebRTCWorker(QObject):
                     continue
 
                 img = frame.to_ndarray(format="bgr24")
-
-                # Adaptive letterboxing to fixed output size
-                img = self.letterbox(
-                    img,
-                    self.VIRTUAL_CAM_WIDTH,
-                    self.VIRTUAL_CAM_HEIGHT,
-                )
 
                 # Non-blocking enqueue (always same shape now)
                 self.frame_queue.append(img)

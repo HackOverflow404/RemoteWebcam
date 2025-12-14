@@ -37,7 +37,6 @@ class VirtualCamThread(threading.Thread):
 
                 img = self.frame_queue.popleft()
 
-                # FORCE resolution (critical)
                 if img.shape[1] != self.width or img.shape[0] != self.height:
                     img = cv2.resize(img, (self.width, self.height))
 
