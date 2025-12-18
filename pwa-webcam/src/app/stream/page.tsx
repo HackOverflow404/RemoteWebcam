@@ -13,8 +13,8 @@ const AudioVolumeIndicator = React.lazy(
   () => import("@/components/AudioVolumeIndicator")
 );
 
-import useMediaStream from "@/components/useMediaStream";
-import useWebRTCStream from "@/components/useWebRTCStream";
+import useMediaStream from "@/lib/useMediaStream";
+import useWebRTCStream from "@/lib/useWebRTCStream";
 
 // --- Icon mappings ---
 const icons = {
@@ -138,14 +138,14 @@ function StreamPage() {
     let raf = 0;
 
     const recompute = () => {
-      const w = Math.round(window.innerWidth);
-      const h = Math.round(window.innerHeight);
-
+      const vv = window.visualViewport;
+      const w = Math.round(vv?.width ?? window.innerWidth);
+      const h = Math.round(vv?.height ?? window.innerHeight);
       setVp({ w, h });
 
       if (raf) cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
-        if (isStreamOn) handleRotate(w, h);
+        handleRotate(w, h);
       });
 
       const isLandscape = mq?.matches ?? w > h;
@@ -196,31 +196,30 @@ function StreamPage() {
 
   // Stage style: rotate the whole “surface” and translate it into view
   const stageStyle = useMemo<React.CSSProperties>(() => {
-    // Prefer dynamic viewport units when supported; fall back to vw/vh
-    const vw = "100dvw";
-    const vh = "100dvh";
+    const W = vp.w;
+    const H = vp.h;
 
     if (rotateDeg === 0) {
       return {
         position: "fixed",
         inset: 0,
-        width: vw,
-        height: vh,
+        width: W,
+        height: H,
         transform: "none",
       };
     }
 
-    // In landscape, swap dims and rotate around the center
+    // In landscape, pre-rotate size is swapped so the rotated bbox matches viewport
     return {
       position: "fixed",
       top: "50%",
       left: "50%",
-      width: vh, // swapped
-      height: vw, // swapped
+      width: H,
+      height: W,
       transformOrigin: "center",
       transform: `translate(-50%, -50%) rotate(${rotateDeg}deg)`,
     };
-  }, [rotateDeg]);
+  }, [rotateDeg, vp.w, vp.h]);
 
   // --- Unified video settings handler ---
   const handleVideoSettings = useCallback(
@@ -288,7 +287,7 @@ function StreamPage() {
           >
             <div className="bg-red-500 text-white px-4 py-2 rounded-md flex items-center">
               <span>{errorMessage}</span>
-              <button className="ml-2" onClick={() => {}}>
+              <button className="ml-2" onClick={() => { }}>
                 ✕
               </button>
             </div>
@@ -296,15 +295,14 @@ function StreamPage() {
         )}
 
         <div
-          className={`absolute top-20 right-4 flex items-center z-20 ${
-            connectionStatus === "connected"
-              ? "text-green-500"
-              : connectionStatus === "connecting"
+          className={`absolute top-20 right-4 flex items-center z-20 ${connectionStatus === "connected"
+            ? "text-green-500"
+            : connectionStatus === "connecting"
               ? "text-yellow-500"
               : connectionStatus === "disconnected"
-              ? "text-gray-500"
-              : "text-red-500"
-          }`}
+                ? "text-gray-500"
+                : "text-red-500"
+            }`}
         >
           <span className="material-symbols-outlined">
             {icons.connection[connectionStatus]}
@@ -409,13 +407,12 @@ function StreamPage() {
 
               <button
                 onClick={isStreamOn ? stopStream : startStream}
-                className={`p-3 w-15 h-15 flex items-center justify-center ${
-                  isStreamOn
-                    ? "text-red-500"
-                    : connectionStatus === "connecting"
+                className={`p-3 w-15 h-15 flex items-center justify-center ${isStreamOn
+                  ? "text-red-500"
+                  : connectionStatus === "connecting"
                     ? "text-yellow-500"
                     : "text-green-500"
-                }`}
+                  }`}
                 style={{ transform: `rotate(-${rotateDeg}deg)` }}
                 aria-label={isStreamOn ? "Stop Streaming" : "Start Streaming"}
               >
