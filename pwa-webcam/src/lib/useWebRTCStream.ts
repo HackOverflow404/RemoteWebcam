@@ -115,37 +115,40 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     processedVideoRef.current?.setRotation(rot);
   }, []);
 
-  const cleanup = useCallback((reason?: string) => {
-    log("cleanup()", reason ?? "");
+  const cleanup = useCallback(
+    (reason?: string) => {
+      log("cleanup()", reason ?? "");
 
-    if (reason !== "remote-linux-termination") {
-      if (dcRef.current?.readyState === "open") {
-        dcRef.current.send(
-          JSON.stringify({ type: "terminate", source: "pwa" })
-        );
+      if (reason !== "remote-linux-termination") {
+        if (dcRef.current?.readyState === "open") {
+          dcRef.current.send(
+            JSON.stringify({ type: "terminate", source: "pwa" })
+          );
+        }
       }
-    }
 
-    dcRef.current = null;
-    startedRef.current = false;
-    outDimsRef.current = null;
+      dcRef.current = null;
+      startedRef.current = false;
+      outDimsRef.current = null;
 
-    if (peerRef.current) {
-      try {
-        peerRef.current.close();
-      } catch {}
-      peerRef.current = null;
-    }
+      if (peerRef.current) {
+        try {
+          peerRef.current.close();
+        } catch {}
+        peerRef.current = null;
+      }
 
-    cleanupProcessedVideo();
+      cleanupProcessedVideo();
 
-    setOn(false);
-    setStatus("disconnected");
+      setOn(false);
+      setStatus("disconnected");
 
-    if (reason == "remote-linux-termination") {
-      propsRef.current.handleRemoteTermination(true);
-    }
-  }, [cleanupProcessedVideo]);
+      if (reason == "remote-linux-termination") {
+        propsRef.current.handleRemoteTermination(true);
+      }
+    },
+    [cleanupProcessedVideo]
+  );
 
   function getOutputDims(resolution: string) {
     // Keep output constant so WebRTC never renegotiates on rotation.
@@ -238,6 +241,10 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
         if (track.kind === "video") {
           sourceVideoTrackRef.current = track;
           cleanupProcessedVideo();
+
+          const w = window.visualViewport?.width ?? window.innerWidth;
+          const h = window.visualViewport?.height ?? window.innerHeight;
+          rotationRef.current = computeRotation(Math.round(w), Math.round(h));
 
           const processed = buildProcessed(track, rotationRef.current);
           processedVideoRef.current = processed;
