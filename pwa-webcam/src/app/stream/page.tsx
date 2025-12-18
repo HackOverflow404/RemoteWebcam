@@ -58,10 +58,8 @@ function StreamPage() {
   const [resolution, setResolution] = useState<"sd" | "hd" | "4k">("hd");
   const [exposure, setExposure] = useState(0);
 
-  // viewport in px (critical for correct rotation math on mobile/PWA)
   const [vp, setVp] = useState({ w: 1, h: 1 });
-
-  // rotation degrees for the stage: 0, 90, -90
+  const [safeRaw, setSafeRaw] = useState({ t: 0, r: 0, b: 0, l: 0 });
   const [rotateDeg, setRotateDeg] = useState<0 | 90 | -90>(0);
 
   const handleRemoteTermination = useCallback(() => {
@@ -131,6 +129,41 @@ function StreamPage() {
   }, [connectionStatus]); // keep your original dependency choice
 
   // --- rotation + viewport sizing ---
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const read = () => {
+      const s = getComputedStyle(document.documentElement);
+      const px = (v: string) => Math.round(parseFloat(v || "0")) || 0;
+      setSafeRaw({
+        t: px(s.getPropertyValue("--sat")),
+        r: px(s.getPropertyValue("--sar")),
+        b: px(s.getPropertyValue("--sab")),
+        l: px(s.getPropertyValue("--sal")),
+      });
+    };
+
+    read();
+    window.addEventListener("resize", read);
+    window.visualViewport?.addEventListener?.("resize", read);
+    return () => {
+      window.removeEventListener("resize", read);
+      window.visualViewport?.removeEventListener?.("resize", read);
+    };
+  }, []);
+
+  const safe = useMemo(() => {
+    const { t, r, b, l } = safeRaw;
+
+    if (rotateDeg === 0) return { t, r, b, l };
+
+    // rotateDeg === 90: content-top aligns to physical-left, etc.
+    if (rotateDeg === 90) return { t: l, r: t, b: r, l: b };
+
+    // rotateDeg === -90
+    return { t: r, r: b, b: l, l: t };
+  }, [safeRaw, rotateDeg]);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -321,8 +354,15 @@ function StreamPage() {
 
         {/* Overlay setting buttons */}
         {/* IMPORTANT: absolute (not fixed) so it rotates with stage */}
-        <div className="absolute inset-0 flex flex-col items-center z-10">
-          {/* Top settings */}
+        <div
+          className="absolute inset-0 flex flex-col items-center z-10"
+          style={{
+            paddingTop: safe.t,
+            paddingRight: safe.r,
+            paddingBottom: safe.b, // set to 0 if you *want* to go under home indicator
+            paddingLeft: safe.l,
+          }}
+        >          {/* Top settings */}
           <header className="flex absolute top-0 left-0 right-0 w-full py-5 justify-evenly z-10">
             <button
               onClick={handleBack}
