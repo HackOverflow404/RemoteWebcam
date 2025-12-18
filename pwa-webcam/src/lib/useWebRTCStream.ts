@@ -47,7 +47,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
 
   const log = (...msg: unknown[]) => console.log("[useWebRTCStream]", ...msg);
 
-  function lockOutputDimsOnce() {
+  const lockOutputDimsOnce = useCallback(() => {
     if (outDimsRef.current) return outDimsRef.current;
 
     const { resolution } = propsRef.current;
@@ -55,32 +55,39 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       resolution === "4k"
         ? { w: 3840, h: 2160 }
         : resolution === "sd"
-          ? { w: 640, h: 480 }
-          : { w: 1280, h: 720 };
+        ? { w: 640, h: 480 }
+        : { w: 1280, h: 720 };
 
     outDimsRef.current = dims;
     return dims;
-  }
+  }, []);
 
-  function buildProcessed(
-    track: MediaStreamTrack,
-    rot: Rotation
-  ): ProcessedTrack {
-    const { fps, isFrontCamera } = propsRef.current;
-    const { w, h } = lockOutputDimsOnce();
+  const buildProcessed = useCallback(
+    (track: MediaStreamTrack, rot: Rotation) => {
+      const { fps, isFrontCamera } = propsRef.current;
+      const { w, h } = lockOutputDimsOnce();
 
-    const fit = rot === 0 ? "contain" : "cover";
+      const fit = rot === 0 ? "contain" : "cover";
 
-    return createTransformedTrack(track, {
-      outW: w,
-      outH: h,
-      fps,
-      mirror: isFrontCamera,
-      rotation: rot,
-      fit,
-      background: "black",
-    });
-  }
+      return createTransformedTrack(track, {
+        outW: w,
+        outH: h,
+        fps,
+        mirror: isFrontCamera,
+        rotation: rot,
+        fit,
+        background: "black",
+      });
+    },
+    [lockOutputDimsOnce]
+  );
+
+  const cleanupProcessedVideo = useCallback(() => {
+    if (processedVideoRef.current) {
+      processedVideoRef.current.stop();
+      processedVideoRef.current = null;
+    }
+  }, []);
 
   const computeRotation = (w: number, h: number): Rotation => {
     const isLandscape = w > h;
@@ -126,7 +133,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     if (peerRef.current) {
       try {
         peerRef.current.close();
-      } catch { }
+      } catch {}
       peerRef.current = null;
     }
 
@@ -138,7 +145,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     if (reason == "remote-linux-termination") {
       propsRef.current.handleRemoteTermination(true);
     }
-  }, []);
+  }, [cleanupProcessedVideo]);
 
   function getOutputDims(resolution: string) {
     // Keep output constant so WebRTC never renegotiates on rotation.
@@ -236,8 +243,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
           processedVideoRef.current = processed;
 
           pc.addTrack(processed.track, new MediaStream([processed.track]));
-        }
-        else {
+        } else {
           pc.addTrack(track, media);
         }
       });
@@ -287,7 +293,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       setError(e.message || "WebRTC error");
       cleanup("exception");
     }
-  }, [cleanup]);
+  }, [cleanup, buildProcessed, cleanupProcessedVideo]);
 
   const stopStream = useCallback(() => {
     log("stopStream()");
@@ -322,15 +328,8 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
 
       await sender.replaceTrack(track);
     },
-    []
+    [buildProcessed, cleanupProcessedVideo]
   );
-
-  function cleanupProcessedVideo() {
-    if (processedVideoRef.current) {
-      processedVideoRef.current.stop();
-      processedVideoRef.current = null;
-    }
-  }
 
   return {
     isStreamOn: on,
