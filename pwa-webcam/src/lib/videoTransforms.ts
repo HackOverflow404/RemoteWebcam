@@ -30,9 +30,10 @@ export function createTransformedTrack(
   } = opts;
 
   const video = document.createElement("video");
-  video.srcObject = new MediaStream([inputTrack]);
+  video.autoplay = true;
   video.muted = true;
   video.playsInline = true;
+  video.srcObject = new MediaStream([inputTrack]);
 
   const canvas = document.createElement("canvas");
   canvas.width = outW;
@@ -43,7 +44,6 @@ export function createTransformedTrack(
   const outputTrack = stream.getVideoTracks()[0];
 
   let running = true;
-  let rafId = 0;
   let ready = false;
 
   let rot: Rotation = rotation;
@@ -54,27 +54,35 @@ export function createTransformedTrack(
     rad = rot === 90 ? Math.PI / 2 : rot === -90 ? -Math.PI / 2 : 0;
   };
 
-  video.onloadedmetadata = () => {
-    ready = true;
-    video.play().catch(() => {});
+  const ensurePlay = () => {
+    video
+      .play()
+      .then(() => {
+        ready = true;
+      })
+      .catch(() => {
+        // iOS can deny until user gesture; keep trying lightly
+        ready = video.readyState >= 2;
+      });
   };
 
-  const draw = () => {
+  video.addEventListener("loadeddata", ensurePlay);
+  ensurePlay();
+
+  const drawOnce = () => {
     if (!running) return;
 
     const cw = outW;
     const ch = outH;
 
-    // background
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = background;
     ctx.fillRect(0, 0, cw, ch);
 
-    if (ready) {
-      const srcW = video.videoWidth || 1;
-      const srcH = video.videoHeight || 1;
+    if (ready && video.videoWidth && video.videoHeight) {
+      const srcW = video.videoWidth;
+      const srcH = video.videoHeight;
 
-      // After rotation, the bounding box swaps
       const effW = rot === 90 || rot === -90 ? srcH : srcW;
       const effH = rot === 90 || rot === -90 ? srcW : srcH;
 
@@ -89,25 +97,46 @@ export function createTransformedTrack(
       ctx.save();
       ctx.translate(cw / 2, ch / 2);
       ctx.rotate(rad);
-
-      // mirror in output space
       if (mirror) ctx.scale(-1, 1);
-
       ctx.drawImage(video, -drawW / 2, -drawH / 2, drawW, drawH);
       ctx.restore();
     }
-
-    rafId = requestAnimationFrame(draw);
   };
 
-  rafId = requestAnimationFrame(draw);
+  // Prefer RVFC (prevents “frozen frame” issues on iOS)
+  const anyVideo = video as any;
+  let rafId = 0;
+  let rvfcId = 0;
+
+  const loop = () => {
+    if (!running) return;
+    drawOnce();
+    rafId = requestAnimationFrame(loop);
+  };
+
+  const onVideoFrame = () => {
+    if (!running) return;
+    drawOnce();
+    rvfcId = anyVideo.requestVideoFrameCallback(onVideoFrame);
+  };
+
+  if (typeof anyVideo.requestVideoFrameCallback === "function") {
+    rvfcId = anyVideo.requestVideoFrameCallback(onVideoFrame);
+  } else {
+    rafId = requestAnimationFrame(loop);
+  }
 
   return {
     track: outputTrack,
     setRotation,
     stop: () => {
       running = false;
-      cancelAnimationFrame(rafId);
+      try {
+        cancelAnimationFrame(rafId);
+      } catch {}
+      try {
+        anyVideo.cancelVideoFrameCallback?.(rvfcId);
+      } catch {}
       try {
         outputTrack.stop();
       } catch {}

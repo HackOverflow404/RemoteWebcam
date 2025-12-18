@@ -226,30 +226,20 @@ function StreamPage() {
 
   // Stage style: rotate the whole “surface” and translate it into view
   const stageStyle = useMemo<React.CSSProperties>(() => {
-    const W = vp.w;
-    const H = vp.h;
-
     if (rotateDeg === 0) {
-      return {
-        position: "fixed",
-        inset: 0,
-        width: W,
-        height: H,
-        transform: "none",
-      };
+      return { transform: "none", transformOrigin: "center" };
     }
 
-    // In landscape, pre-rotate size is swapped so the rotated bbox matches viewport
+    // rotate UI layer around center of the screen
     return {
-      position: "fixed",
       top: "50%",
       left: "50%",
-      width: H,
-      height: W,
+      width: "100dvh",
+      height: "100dvw",
       transformOrigin: "center",
       transform: `translate(-50%, -50%) rotate(${rotateDeg}deg)`,
     };
-  }, [rotateDeg, vp.w, vp.h]);
+  }, [rotateDeg]);
 
   const handleBack = useCallback(() => {
     stopStream();
@@ -258,145 +248,151 @@ function StreamPage() {
 
   return (
     <section className="fixed inset-0 overflow-hidden bg-black">
-      <div style={stageStyle}>
+      {/* 1) VIDEO ALWAYS FULLSCREEN (covers any stage math mistakes) */}
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        controls={false}
+        onDoubleClick={async () => {
+          const newTrack = await flipCamera();
+          if (newTrack && isStreamOn) replaceTrack("video", newTrack);
+        }}
+        style={{
+          width: "100dvw",
+          height: "100dvh",
+          objectFit: "cover",
+          transform: isFrontCamera ? "scaleX(-1)" : "scaleX(1)",
+        }}
+        className="fixed inset-0 z-0"
+      />
+
+      {/* 2) UI LAYER (rotates) */}
+      <div style={stageStyle} className="fixed inset-0 z-10 pointer-events-none">
+        {/* loading overlay */}
         {isLoadingMedia && (
-          <div className="absolute inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 pointer-events-none">
+          <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-50">
             <div className="text-white text-2xl">Loading Media...</div>
           </div>
         )}
 
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          controls={false}
-          onDoubleClick={async () => {
-            const newTrack = await flipCamera();
-            if (newTrack && isStreamOn) replaceTrack("video", newTrack);
-          }}
+        {/* TOP BAR (below notch ONLY in portrait) */}
+        <div
+          className="absolute left-0 right-0 flex items-center justify-between px-4"
           style={{
-            transform: isFrontCamera ? "scaleX(-1)" : "scaleX(1)",
-            transition: "opacity 0.3s ease",
+            top: (rotateDeg === 0 ? safe.t : 0) + 10,
+            paddingLeft: safe.l + 8,
+            paddingRight: safe.r + 8,
+            transform: `rotate(-${rotateDeg}deg)`,
+            pointerEvents: "auto",
           }}
-          className="absolute inset-0 w-full h-full object-cover z-0"
-        />
+        >
+          {/* Back button moved to top-left (NOT in footer center) */}
+          <button
+            onClick={handleBack}
+            className="p-2 bg-black/40 rounded-lg text-white"
+            aria-label="Back"
+          >
+            <span className="material-symbols-outlined">arrow_back</span>
+          </button>
 
+          <div className="flex items-center gap-3">
+            {/* Code */}
+            {sessionCode && (
+              <div className="bg-black/50 text-white px-3 py-1 rounded-md">
+                Code: {sessionCode}
+              </div>
+            )}
+
+            {/* Connection */}
+            <div
+              className={`flex items-center ${connectionStatus === "connected"
+                ? "text-green-500"
+                : connectionStatus === "connecting"
+                  ? "text-yellow-500"
+                  : connectionStatus === "disconnected"
+                    ? "text-gray-300"
+                    : "text-red-500"
+                }`}
+            >
+              <span className="material-symbols-outlined">
+                {icons.connection[connectionStatus]}
+              </span>
+              <span className="ml-2">
+                {connectionStatus.charAt(0).toUpperCase() +
+                  connectionStatus.slice(1)}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Error toast */}
         {errorMessage && (
           <div
-            className="absolute top-24 left-0 right-0 flex justify-center animate-pulse z-20"
-            style={{ transform: `rotate(-${rotateDeg}deg)` }}
+            className="absolute left-0 right-0 flex justify-center z-20"
+            style={{
+              top: (rotateDeg === 0 ? safe.t : 0) + 70,
+              transform: `rotate(-${rotateDeg}deg)`,
+              pointerEvents: "auto",
+            }}
           >
             <div className="bg-red-500 text-white px-4 py-2 rounded-md flex items-center">
               <span>{errorMessage}</span>
-              <button className="ml-2" onClick={() => { }}>
-                ✕
-              </button>
             </div>
           </div>
         )}
 
-        <div
-          className={`absolute top-20 right-4 flex items-center z-20 ${connectionStatus === "connected"
-            ? "text-green-500"
-            : connectionStatus === "connecting"
-              ? "text-yellow-500"
-              : connectionStatus === "disconnected"
-                ? "text-gray-500"
-                : "text-red-500"
-            }`}
-          style={{ top: 20 + safe.t, transform: `rotate(-${rotateDeg}deg)` }}
-        >
-          <span className="material-symbols-outlined">
-            {icons.connection[connectionStatus]}
-          </span>
-          <span className="ml-2">
-            {connectionStatus.charAt(0).toUpperCase() +
-              connectionStatus.slice(1)}
-          </span>
-        </div>
-
-        {sessionCode && (
-          <div
-            className="absolute top-16 left-4 bg-black bg-opacity-50 text-white px-3 py-1 rounded-md z-20"
-            style={{ top: 16 + safe.t, left: 4 + safe.l, transform: `rotate(-${rotateDeg}deg)` }}
-          >
-            Code: {sessionCode}
-          </div>
-        )}
-
-        {/* Bottom settings */}
+        {/* BOTTOM CONTROLS (no back button here) */}
         <footer
-          className="flex flex-col absolute bottom-0 left-0 right-0 w-full py-10 justify-evenly z-10"
+          className="absolute left-0 right-0 flex flex-col items-center gap-4"
           style={{
-            paddingLeft: safe.l,
-            paddingRight: safe.r,
-            paddingBottom: safe.b, // or 0 if you want to go under home bar
+            bottom: 0,
+            paddingLeft: safe.l + 10,
+            paddingRight: safe.r + 10,
+            paddingBottom: safe.b + 12, // keeps controls above home indicator
+            transform: `rotate(-${rotateDeg}deg)`,
+            pointerEvents: "auto",
           }}
         >
           {isMicOn === "on" && media && media.getAudioTracks().length > 0 && (
-            <React.Suspense fallback={<div>Loading Mic Volume...</div>}>
+            <React.Suspense fallback={null}>
               <AudioVolumeIndicator isEnabled={true} mediaStream={media} />
             </React.Suspense>
           )}
 
-          <button
-            onClick={handleBack}
-            className="p-3"
-            style={{ transform: `rotate(-${rotateDeg}deg)` }}
-            aria-label="Return"
-          >
-            <span className="material-symbols-outlined">keyboard_return</span>
-          </button>
-
           <div className="flex flex-row w-full justify-evenly">
             <button
               onClick={toggleMic}
-              className="p-3 w-15 h-15 flex items-center justify-center"
-              style={{ transform: `rotate(-${rotateDeg}deg)` }}
-              aria-label={
-                isMicOn === "on" ? "Mute Microphone" : "Unmute Microphone"
-              }
+              className="p-3 flex items-center justify-center"
+              aria-label={isMicOn === "on" ? "Mute Microphone" : "Unmute Microphone"}
             >
-              <span
-                className="material-symbols-outlined"
-                style={{ fontSize: "40px" }}
-              >
+              <span className="material-symbols-outlined" style={{ fontSize: 40 }}>
                 {icons.microphone[isMicOn]}
               </span>
             </button>
 
             <button
               onClick={isStreamOn ? stopStream : startStream}
-              className={`p-3 w-15 h-15 flex items-center justify-center ${isStreamOn
+              className={`p-3 flex items-center justify-center ${isStreamOn
                 ? "text-red-500"
                 : connectionStatus === "connecting"
                   ? "text-yellow-500"
                   : "text-green-500"
                 }`}
-              style={{ transform: `rotate(-${rotateDeg}deg)` }}
               aria-label={isStreamOn ? "Stop Streaming" : "Start Streaming"}
             >
-              <span
-                className="material-symbols-outlined"
-                style={{ fontSize: "80px" }}
-              >
-                {isStreamOn
-                  ? "radio_button_checked"
-                  : "radio_button_unchecked"}
+              <span className="material-symbols-outlined" style={{ fontSize: 80 }}>
+                {isStreamOn ? "radio_button_checked" : "radio_button_unchecked"}
               </span>
             </button>
 
             <button
               onClick={toggleVideo}
-              className="p-3 w-15 h-15 flex items-center justify-center"
-              style={{ transform: `rotate(-${rotateDeg}deg)` }}
+              className="p-3 flex items-center justify-center"
               aria-label={isVidOn === "on" ? "Stop Video" : "Start Video"}
             >
-              <span
-                className="material-symbols-outlined"
-                style={{ fontSize: "40px" }}
-              >
+              <span className="material-symbols-outlined" style={{ fontSize: 40 }}>
                 {icons.video[isVidOn]}
               </span>
             </button>
