@@ -3,208 +3,108 @@ export interface ProcessedTrack {
   stop: () => void;
 }
 
-export function createMirroredTrack(
+export type Rotation = 0 | 90 | -90;
+export type FitMode = "contain" | "cover";
+
+export function createTransformedTrack(
   inputTrack: MediaStreamTrack,
-  mirror: boolean,
-  fps: number = 30
-): ProcessedTrack {
-  const video = document.createElement("video");
-  video.srcObject = new MediaStream([inputTrack]);
-  video.muted = true;
-  video.playsInline = true;
-
-  const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d", { alpha: false })!;
-
-  const stream = canvas.captureStream(fps);
-  const outputTrack = stream.getVideoTracks()[0];
-
-  let running = true;
-  let rafId = 0;
-
-  video.onloadedmetadata = () => {
-    canvas.width = video.videoWidth || 1280;
-    canvas.height = video.videoHeight || 720;
-    video.play().catch(() => {});
-  };
-
-  function draw() {
-    if (!running) return;
-
-    const w = canvas.width;
-    const h = canvas.height;
-
-    ctx.save();
-    if (mirror) {
-      ctx.translate(w, 0);
-      ctx.scale(-1, 1);
-    }
-    ctx.drawImage(video, 0, 0, w, h);
-    ctx.restore();
-
-    rafId = requestAnimationFrame(draw);
+  opts: {
+    outW: number;
+    outH: number;
+    fps?: number;
+    mirror?: boolean;
+    rotation?: Rotation;
+    fit?: FitMode;
+    background?: string;
   }
-
-  rafId = requestAnimationFrame(draw);
-
-  return {
-    track: outputTrack,
-    stop: () => {
-      running = false;
-      cancelAnimationFrame(rafId);
-      try { outputTrack.stop(); } catch {}
-      try { video.pause(); } catch {}
-      video.srcObject = null;
-    },
-  };
-}
-
-export function createLetterboxedTrack(
-  inputTrack: MediaStreamTrack,
-  outW: number,
-  outH: number,
-  fps: number = 30,
-  background: string = "black"
 ): ProcessedTrack {
+  const {
+    outW,
+    outH,
+    fps = 30,
+    mirror = false,
+    rotation = 0,
+    fit = "contain",
+    background = "black",
+  } = opts;
+
   const video = document.createElement("video");
   video.srcObject = new MediaStream([inputTrack]);
   video.muted = true;
   video.playsInline = true;
 
+  // ✅ FIXED OUTPUT SIZE BEFORE CAPTURE
   const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d", { alpha: false })!;
   canvas.width = outW;
   canvas.height = outH;
 
+  const ctx = canvas.getContext("2d", { alpha: false })!;
   const stream = canvas.captureStream(fps);
   const outputTrack = stream.getVideoTracks()[0];
 
   let running = true;
   let rafId = 0;
+  let ready = false;
+
+  const rad =
+    rotation === 90 ? Math.PI / 2 : rotation === -90 ? -Math.PI / 2 : 0;
 
   video.onloadedmetadata = () => {
+    ready = true;
     video.play().catch(() => {});
-  };
-
-  function draw() {
-    if (!running) return;
-
-    const srcW = video.videoWidth || 0;
-    const srcH = video.videoHeight || 0;
-
-    ctx.fillStyle = background;
-    ctx.fillRect(0, 0, outW, outH);
-
-    if (srcW > 0 && srcH > 0) {
-      const scale = Math.min(outW / srcW, outH / srcH);
-      const newW = Math.round(srcW * scale);
-      const newH = Math.round(srcH * scale);
-      const xOff = Math.floor((outW - newW) / 2);
-      const yOff = Math.floor((outH - newH) / 2);
-      ctx.drawImage(video, xOff, yOff, newW, newH);
-    }
-
-    rafId = requestAnimationFrame(draw);
-  }
-
-  rafId = requestAnimationFrame(draw);
-
-  return {
-    track: outputTrack,
-    stop: () => {
-      running = false;
-      cancelAnimationFrame(rafId);
-      try { outputTrack.stop(); } catch {}
-      try { video.pause(); } catch {}
-      video.srcObject = null;
-    },
-  };
-}
-
-export type Rotation = 0 | 90 | -90;
-
-export function createRotatedTrack(
-  inputTrack: MediaStreamTrack,
-  rotation: Rotation,
-  fps = 30,
-  background: string = "black"
-): ProcessedTrack {
-  const video = document.createElement("video");
-  video.srcObject = new MediaStream([inputTrack]);
-  video.muted = true;
-  video.playsInline = true;
-
-  const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d")!;
-
-  const stream = canvas.captureStream(fps);
-  const outputTrack = stream.getVideoTracks()[0];
-
-  let running = true;
-  let rafId = 0;
-
-  const setCanvasSize = () => {
-    const vw = video.videoWidth || 1;
-    const vh = video.videoHeight || 1;
-
-    // If we rotate 90°, the rendered frame's natural dimensions swap.
-    if (rotation === 90 || rotation === -90) {
-      canvas.width = vh;
-      canvas.height = vw;
-    } else {
-      canvas.width = vw;
-      canvas.height = vh;
-    }
-  };
-
-  video.onloadedmetadata = async () => {
-    setCanvasSize();
-    await video.play();
   };
 
   const draw = () => {
     if (!running) return;
 
-    const cw = canvas.width;
-    const ch = canvas.height;
+    const cw = outW;
+    const ch = outH;
 
-    // background (helps avoid garbage pixels)
-    ctx.save();
+    // background
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = background;
     ctx.fillRect(0, 0, cw, ch);
-    ctx.restore();
 
-    // center-based rotation
-    ctx.save();
-    ctx.translate(cw / 2, ch / 2);
+    if (ready) {
+      const srcW = video.videoWidth || 1;
+      const srcH = video.videoHeight || 1;
 
-    const rad =
-      rotation === 90 ? Math.PI / 2 : rotation === -90 ? -Math.PI / 2 : 0;
-    ctx.rotate(rad);
+      // After rotation, the bounding box swaps
+      const effW = rotation === 90 || rotation === -90 ? srcH : srcW;
+      const effH = rotation === 90 || rotation === -90 ? srcW : srcH;
 
-    // after rotation, draw original video centered
-    const vw = video.videoWidth || 1;
-    const vh = video.videoHeight || 1;
-    ctx.drawImage(video, -vw / 2, -vh / 2, vw, vh);
+      const scale =
+        fit === "cover"
+          ? Math.max(cw / effW, ch / effH)
+          : Math.min(cw / effW, ch / effH);
 
-    ctx.restore();
+      const drawW = srcW * scale;
+      const drawH = srcH * scale;
+
+      ctx.save();
+      ctx.translate(cw / 2, ch / 2);
+      ctx.rotate(rad);
+
+      // mirror in output space
+      if (mirror) ctx.scale(-1, 1);
+
+      ctx.drawImage(video, -drawW / 2, -drawH / 2, drawW, drawH);
+      ctx.restore();
+    }
 
     rafId = requestAnimationFrame(draw);
   };
 
-  draw();
+  rafId = requestAnimationFrame(draw);
 
   return {
     track: outputTrack,
     stop: () => {
       running = false;
-      if (rafId) cancelAnimationFrame(rafId);
-      outputTrack.stop();
-      video.pause();
-      // important: do NOT stop inputTrack here; it’s owned by your camera stream
-      // inputTrack.stop();
-      (video as any).srcObject = null;
+      cancelAnimationFrame(rafId);
+      try { outputTrack.stop(); } catch {}
+      try { video.pause(); } catch {}
+      video.srcObject = null;
     },
   };
 }
