@@ -135,6 +135,7 @@ function StreamPage() {
     if (typeof window === "undefined") return;
 
     const mq = window.matchMedia?.("(orientation: landscape)");
+    let raf = 0;
 
     const recompute = () => {
       const w = Math.round(window.innerWidth);
@@ -142,26 +143,22 @@ function StreamPage() {
 
       setVp({ w, h });
 
-      const isLandscape = mq?.matches ?? w > h;
+      if (raf) cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        if (isStreamOn) handleRotate(w, h);
+      });
 
-      handleRotate( w, h);
+      const isLandscape = mq?.matches ?? w > h;
 
       if (!isLandscape) {
         setRotateDeg(0);
         return;
       }
 
-      const type = window.screen?.orientation?.type; // best signal when available
-      if (type === "landscape-secondary") {
-        setRotateDeg(-90);
-        return;
-      }
-      if (type === "landscape-primary") {
-        setRotateDeg(90);
-        return;
-      }
+      const type = window.screen?.orientation?.type;
+      if (type === "landscape-secondary") return setRotateDeg(-90);
+      if (type === "landscape-primary") return setRotateDeg(90);
 
-      // fallback: angle
       const screenAngle = (window.screen?.orientation?.angle ?? 0) as number;
       const legacyAngle =
         typeof (window as any).orientation === "number"
@@ -169,8 +166,7 @@ function StreamPage() {
           : 0;
       const angle = screenAngle || legacyAngle || 0;
 
-      if (angle === -90 || angle === 270) setRotateDeg(-90);
-      else setRotateDeg(90);
+      setRotateDeg(angle === -90 || angle === 270 ? -90 : 90);
     };
 
     recompute();
@@ -185,6 +181,7 @@ function StreamPage() {
     window.screen?.orientation?.addEventListener?.("change", recompute);
 
     return () => {
+      if (raf) cancelAnimationFrame(raf);
       window.removeEventListener("resize", recompute);
       window.removeEventListener("orientationchange", recompute);
       window.visualViewport?.removeEventListener?.("resize", recompute);
@@ -195,7 +192,7 @@ function StreamPage() {
 
       window.screen?.orientation?.removeEventListener?.("change", recompute);
     };
-  }, []);
+  }, [handleRotate, isStreamOn]);
 
   // Stage style: rotate the whole “surface” and translate it into view
   const stageStyle = useMemo<React.CSSProperties>(() => {
