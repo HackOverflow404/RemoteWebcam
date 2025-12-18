@@ -82,26 +82,32 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     });
   }
 
-  const handleRotate = useCallback(async (w: number, h: number) => {
-    const pc = peerRef.current;
-    if (!pc) return;
-
-    // Decide rotation (use the same logic as StreamPage)
+  const computeRotation = (w: number, h: number): Rotation => {
     const isLandscape = w > h;
-    let rot: Rotation = 0;
+    if (!isLandscape) return 0;
 
-    if (isLandscape) {
-      const type = window.screen?.orientation?.type;
-      if (type === "landscape-secondary") rot = -90;
-      else if (type === "landscape-primary") rot = 90;
-      else {
-        const angle = (window.screen?.orientation?.angle ?? 0) as number;
-        rot = angle === -90 || angle === 270 ? -90 : 90;
-      }
-    }
+    const type = window.screen?.orientation?.type;
+    if (type === "landscape-secondary") return -90;
+    if (type === "landscape-primary") return 90;
 
+    const screenAngle = (window.screen?.orientation?.angle ?? 0) as number;
+    const legacyAngle =
+      typeof (window as any).orientation === "number"
+        ? (window as any).orientation
+        : 0;
+
+    const angle = screenAngle || legacyAngle || 0;
+    return angle === -90 || angle === 270 ? -90 : 90;
+  };
+
+  const handleRotate = useCallback(async (w: number, h: number) => {
+    // Always update the cached rotation (even if pc isn’t ready yet)
+    const rot = computeRotation(w, h);
     if (rot === rotationRef.current) return;
     rotationRef.current = rot;
+
+    const pc = peerRef.current;
+    if (!pc) return; // pc not ready yet; startStream will use rotationRef.current
 
     const src = sourceVideoTrackRef.current;
     if (!src) return;
@@ -109,13 +115,13 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     const sender = pc.getSenders().find((s) => s.track?.kind === "video");
     if (!sender) return;
 
-    // rebuild pipeline
     cleanupProcessedVideo();
     const processed = buildProcessed(src, rot);
     processedVideoRef.current = processed;
 
     await sender.replaceTrack(processed.track);
   }, []);
+
 
   const cleanup = useCallback((reason?: string) => {
     log("cleanup()", reason ?? "");
