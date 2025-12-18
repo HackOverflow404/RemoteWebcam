@@ -184,11 +184,11 @@ class PixelStreamerApp(QMainWindow):
         if frame is None:
             return
 
-        h, w, ch = frame.shape
-        bytes_per_line = ch * w
-
-        # BGR → RGB (IMPORTANT)
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        rgb = np.ascontiguousarray(rgb)
+
+        h, w, ch = rgb.shape
+        bytes_per_line = ch * w
 
         image = QImage(
             rgb.data,
@@ -196,7 +196,7 @@ class PixelStreamerApp(QMainWindow):
             h,
             bytes_per_line,
             QImage.Format_RGB888,
-        )
+        ).copy()  # ✅ detach from numpy memory
 
         self.video_label.setPixmap(QPixmap.fromImage(image))
     
