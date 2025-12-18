@@ -1,6 +1,7 @@
 export interface ProcessedTrack {
   track: MediaStreamTrack;
   stop: () => void;
+  setRotation: (r: Rotation) => void;
 }
 
 export type Rotation = 0 | 90 | -90;
@@ -33,7 +34,6 @@ export function createTransformedTrack(
   video.muted = true;
   video.playsInline = true;
 
-  // ✅ FIXED OUTPUT SIZE BEFORE CAPTURE
   const canvas = document.createElement("canvas");
   canvas.width = outW;
   canvas.height = outH;
@@ -46,8 +46,13 @@ export function createTransformedTrack(
   let rafId = 0;
   let ready = false;
 
-  const rad =
-    rotation === 90 ? Math.PI / 2 : rotation === -90 ? -Math.PI / 2 : 0;
+  let rot: Rotation = rotation;
+  let rad = rot === 90 ? Math.PI / 2 : rot === -90 ? -Math.PI / 2 : 0;
+
+  const setRotation = (r: Rotation) => {
+    rot = r;
+    rad = rot === 90 ? Math.PI / 2 : rot === -90 ? -Math.PI / 2 : 0;
+  };
 
   video.onloadedmetadata = () => {
     ready = true;
@@ -70,8 +75,8 @@ export function createTransformedTrack(
       const srcH = video.videoHeight || 1;
 
       // After rotation, the bounding box swaps
-      const effW = rotation === 90 || rotation === -90 ? srcH : srcW;
-      const effH = rotation === 90 || rotation === -90 ? srcW : srcH;
+      const effW = rot === 90 || rot === -90 ? srcH : srcW;
+      const effH = rot === 90 || rot === -90 ? srcW : srcH;
 
       const scale =
         fit === "cover"
@@ -99,11 +104,16 @@ export function createTransformedTrack(
 
   return {
     track: outputTrack,
+    setRotation,
     stop: () => {
       running = false;
       cancelAnimationFrame(rafId);
-      try { outputTrack.stop(); } catch {}
-      try { video.pause(); } catch {}
+      try {
+        outputTrack.stop();
+      } catch {}
+      try {
+        video.pause();
+      } catch {}
       video.srcObject = null;
     },
   };
