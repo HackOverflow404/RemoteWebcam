@@ -25,7 +25,7 @@ export function createTransformedTrack(
     fps = 30,
     mirror = false,
     rotation = 0,
-    fit = "contain",
+    fit = "cover",
     background = "black",
   } = opts;
 
@@ -33,6 +33,9 @@ export function createTransformedTrack(
   video.autoplay = true;
   video.muted = true;
   video.playsInline = true;
+  video.setAttribute("playsinline", "");
+  video.setAttribute("muted", "");
+
   video.srcObject = new MediaStream([inputTrack]);
 
   const canvas = document.createElement("canvas");
@@ -55,87 +58,79 @@ export function createTransformedTrack(
   };
 
   const ensurePlay = () => {
-    video
-      .play()
-      .then(() => {
-        ready = true;
-      })
-      .catch(() => {
-        // iOS can deny until user gesture; keep trying lightly
-        ready = video.readyState >= 2;
-      });
+    video.play().catch(() => {});
   };
 
-  video.addEventListener("loadeddata", ensurePlay);
-  ensurePlay();
+  video.onloadedmetadata = () => {
+    ready = true;
+    ensurePlay();
+  };
+  video.onloadeddata = ensurePlay;
 
-  const drawOnce = () => {
-    if (!running) return;
-
+  const draw = () => {
     const cw = outW;
     const ch = outH;
 
+    // background
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = background;
     ctx.fillRect(0, 0, cw, ch);
 
-    if (ready && video.videoWidth && video.videoHeight) {
-      const srcW = video.videoWidth;
-      const srcH = video.videoHeight;
+    if (!ready || video.readyState < 2) return;
 
-      const effW = rot === 90 || rot === -90 ? srcH : srcW;
-      const effH = rot === 90 || rot === -90 ? srcW : srcH;
+    const srcW = video.videoWidth || 1;
+    const srcH = video.videoHeight || 1;
 
-      const scale =
-        fit === "cover"
-          ? Math.max(cw / effW, ch / effH)
-          : Math.min(cw / effW, ch / effH);
+    const effW = rot === 90 || rot === -90 ? srcH : srcW;
+    const effH = rot === 90 || rot === -90 ? srcW : srcH;
 
-      const drawW = srcW * scale;
-      const drawH = srcH * scale;
+    const scale =
+      fit === "cover"
+        ? Math.max(cw / effW, ch / effH)
+        : Math.min(cw / effW, ch / effH);
 
-      ctx.save();
-      ctx.translate(cw / 2, ch / 2);
-      ctx.rotate(rad);
-      if (mirror) ctx.scale(-1, 1);
-      ctx.drawImage(video, -drawW / 2, -drawH / 2, drawW, drawH);
-      ctx.restore();
-    }
+    const drawW = srcW * scale;
+    const drawH = srcH * scale;
+
+    ctx.save();
+    ctx.translate(cw / 2, ch / 2);
+    ctx.rotate(rad);
+
+    if (mirror) ctx.scale(-1, 1);
+
+    ctx.drawImage(video, -drawW / 2, -drawH / 2, drawW, drawH);
+    ctx.restore();
   };
 
-  // Prefer RVFC (prevents “frozen frame” issues on iOS)
-  const anyVideo = video as any;
+  // Use requestVideoFrameCallback when available (prevents “frozen” canvas streams)
+  const rvfc = (video as any).requestVideoFrameCallback?.bind(video) as
+    | ((cb: (now: number, metadata: any) => void) => number)
+    | undefined;
+
   let rafId = 0;
-  let rvfcId = 0;
+  let vfcId = 0;
 
   const loop = () => {
     if (!running) return;
-    drawOnce();
-    rafId = requestAnimationFrame(loop);
+    draw();
+
+    if (rvfc) {
+      vfcId = rvfc(() => loop());
+    } else {
+      rafId = requestAnimationFrame(loop);
+    }
   };
 
-  const onVideoFrame = () => {
-    if (!running) return;
-    drawOnce();
-    rvfcId = anyVideo.requestVideoFrameCallback(onVideoFrame);
-  };
-
-  if (typeof anyVideo.requestVideoFrameCallback === "function") {
-    rvfcId = anyVideo.requestVideoFrameCallback(onVideoFrame);
-  } else {
-    rafId = requestAnimationFrame(loop);
-  }
+  loop();
 
   return {
     track: outputTrack,
     setRotation,
     stop: () => {
       running = false;
+      if (rafId) cancelAnimationFrame(rafId);
       try {
-        cancelAnimationFrame(rafId);
-      } catch {}
-      try {
-        anyVideo.cancelVideoFrameCallback?.(rvfcId);
+        (video as any).cancelVideoFrameCallback?.(vfcId);
       } catch {}
       try {
         outputTrack.stop();
