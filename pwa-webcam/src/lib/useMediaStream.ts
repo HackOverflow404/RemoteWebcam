@@ -10,13 +10,6 @@ interface UseMediaStreamOptions {
   resolution?: "sd" | "hd" | "4k";
 }
 
-interface UpdateConstraintsOptions {
-  fps?: "30" | "60";
-  resolution?: "sd" | "hd" | "4k";
-  facingMode?: "user" | "environment";
-  exposure?: number;
-}
-
 export default function useMediaStream({
   initialAudio = true,
   initialVideo = true,
@@ -36,13 +29,6 @@ export default function useMediaStream({
   const [isFrontCamera, setIsFrontCamera] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [fpsState, setFpsState] = useState<"30" | "60">(fps);
-  const [resolutionState, setResolutionState] = useState<"sd" | "hd" | "4k">(
-    resolution
-  );
-  const [facingModeState, setFacingModeState] = useState<
-    "user" | "environment"
-  >("user");
 
   // Keep streamRef in sync with state
   useEffect(() => {
@@ -54,31 +40,32 @@ export default function useMediaStream({
     (
       videoState: MediaState = isVidOn,
       audioState: MediaState = isMicOn,
-      facing = facingModeState
+      facing: "user" | "environment" = isFrontCamera ? "user" : "environment"
     ): MediaStreamConstraints => ({
       video:
         videoState === "on"
           ? {
-              facingMode: facing,
-              frameRate: { ideal: Number(fpsState) },
-              width:
-                resolutionState === "sd"
-                  ? { ideal: 640 }
-                  : resolutionState === "hd"
+            facingMode: facing,
+            frameRate: { ideal: Number(fps) },
+            width:
+              resolution === "sd"
+                ? { ideal: 640 }
+                : resolution === "hd"
                   ? { ideal: 1280 }
                   : { ideal: 3840 },
-              height:
-                resolutionState === "sd"
-                  ? { ideal: 480 }
-                  : resolutionState === "hd"
+            height:
+              resolution === "sd"
+                ? { ideal: 480 }
+                : resolution === "hd"
                   ? { ideal: 720 }
                   : { ideal: 2160 },
-            }
+          }
           : false,
       audio: audioState === "on",
     }),
-    [isVidOn, isMicOn, facingModeState, fpsState, resolutionState]
+    [isVidOn, isMicOn, isFrontCamera, fps, resolution]
   );
+
 
   // --- Clean up utility ---
   const stopAllTracks = useCallback((s: MediaStream | null) => {
@@ -155,90 +142,6 @@ export default function useMediaStream({
     [getConstraints, isVidOn, isMicOn, isFrontCamera, stopAllTracks]
   );
 
-  const updateConstraints = useCallback(
-    async (
-      opts: UpdateConstraintsOptions
-    ): Promise<MediaStreamTrack | null> => {
-      // Compute the "next" settings (don’t rely on state having updated yet)
-      const nextFps: "30" | "60" = opts.fps ?? fpsState;
-      const nextRes: "sd" | "hd" | "4k" = opts.resolution ?? resolutionState;
-      const nextFacing: "user" | "environment" =
-        opts.facingMode ?? facingModeState;
-
-      // Update UI state (async)
-      if (opts.fps) setFpsState(opts.fps);
-      if (opts.resolution) setResolutionState(opts.resolution);
-      if (opts.facingMode) setFacingModeState(opts.facingMode);
-
-      // Build constraints using the *next* values (not stale state)
-      const videoConstraints =
-        isVidOn === "on"
-          ? {
-              facingMode: nextFacing,
-              frameRate: { ideal: Number(nextFps) },
-              width:
-                nextRes === "sd"
-                  ? { ideal: 640 }
-                  : nextRes === "hd"
-                  ? { ideal: 1280 }
-                  : { ideal: 3840 },
-              height:
-                nextRes === "sd"
-                  ? { ideal: 480 }
-                  : nextRes === "hd"
-                  ? { ideal: 720 }
-                  : { ideal: 2160 },
-              // NOTE: "exposure" is not a standard constraint; leaving it out is safest.
-              // If you want exposure control, it must be done via track.applyConstraints
-              // with supported advanced constraints on that device.
-            }
-          : false;
-
-      const newConstraints: MediaStreamConstraints = {
-        video: videoConstraints,
-        audio: isMicOn === "on",
-      };
-
-      try {
-        const newStream = await navigator.mediaDevices.getUserMedia(
-          newConstraints
-        );
-        const currentStream = streamRef.current;
-
-        const newVideoTrack = newStream.getVideoTracks()[0] ?? null;
-
-        if (currentStream) {
-          // Swap ONLY video tracks inside the existing MediaStream
-          currentStream.getVideoTracks().forEach((t) => {
-            t.stop();
-            currentStream.removeTrack(t);
-          });
-
-          if (newVideoTrack) currentStream.addTrack(newVideoTrack);
-
-          if (videoRef.current) videoRef.current.srcObject = currentStream;
-        } else {
-          // First-time case: keep stream state consistent
-          setStream(newStream);
-          if (videoRef.current) videoRef.current.srcObject = newStream;
-        }
-
-        setIsVidOn(newVideoTrack ? "on" : "off");
-        setError(null);
-
-        // IMPORTANT: stop temp audio tracks from the "newStream" so we don't leak mic captures
-        newStream.getAudioTracks().forEach((t) => t.stop());
-
-        return newVideoTrack;
-      } catch (err: any) {
-        setError(err.message || "Failed to update constraints");
-        setIsVidOn("error");
-        return null;
-      }
-    },
-    [fpsState, resolutionState, facingModeState, isVidOn, isMicOn, videoRef]
-  );
-
   // --- Toggle mic/video/camera (all use stable handlers) ---
   const toggleMic = useCallback(() => {
     const newState: MediaState = isMicOn === "on" ? "off" : "on";
@@ -298,7 +201,6 @@ export default function useMediaStream({
     toggleMic,
     toggleVideo,
     flipCamera,
-    updateConstraints,
     isMicOn,
     isVidOn,
     isFrontCamera,
