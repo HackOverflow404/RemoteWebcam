@@ -101,27 +101,12 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
   };
 
   const handleRotate = useCallback(async (w: number, h: number) => {
-    // Always update the cached rotation (even if pc isn’t ready yet)
     const rot = computeRotation(w, h);
     if (rot === rotationRef.current) return;
     rotationRef.current = rot;
 
-    const pc = peerRef.current;
-    if (!pc) return; // pc not ready yet; startStream will use rotationRef.current
-
-    const src = sourceVideoTrackRef.current;
-    if (!src) return;
-
-    const sender = pc.getSenders().find((s) => s.track?.kind === "video");
-    if (!sender) return;
-
-    cleanupProcessedVideo();
-    const processed = buildProcessed(src, rot);
-    processedVideoRef.current = processed;
-
-    await sender.replaceTrack(processed.track);
+    processedVideoRef.current?.setRotation(rot);
   }, []);
-
 
   const cleanup = useCallback((reason?: string) => {
     log("cleanup()", reason ?? "");
