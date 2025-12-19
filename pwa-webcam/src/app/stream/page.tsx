@@ -93,6 +93,8 @@ function StreamPage() {
     stopStream,
     replaceTrack,
     handleRotate,
+    pauseStream,
+    resumeStream,
     isStreamOn,
     connectionStatus,
     error: RTCStreamError,
@@ -274,6 +276,7 @@ function StreamPage() {
           muted
           controls={false}
           onDoubleClick={async () => {
+            console.log("Double tap registered");
             const newTrack = await flipCamera();
             if (newTrack && isStreamOn) replaceTrack("video", newTrack);
           }}
@@ -284,7 +287,7 @@ function StreamPage() {
             height: rotateDeg == 0 ? "100dvh" : vp.w,
             objectFit: "cover",
           }}
-          className="absolute inset-0 object-cover z-0 m-0 p-0 full-bleed"
+          className="absolute inset-0 object-cover z-0 m-0 p-0"
         />
 
         {errorMessage && (
@@ -374,7 +377,7 @@ function StreamPage() {
               </button>
 
               <button
-                onClick={isStreamOn ? stopStream : startStream}
+                onClick={isStreamOn ? pauseStream : resumeStream}
                 className={`p-3 w-15 h-15 flex items-center justify-center ${isStreamOn
                   ? "text-red-500"
                   : connectionStatus === "connecting"
