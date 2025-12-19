@@ -102,7 +102,7 @@ export default function useMediaStream({
     setIsMicOn(() => (isMicOn === "on" ? "off" : "on"));
   }, [isMicOn]);
 
-  const toggleVideo = useCallback(() => {
+  const toggleVid = useCallback(() => {
     streamRef.current?.getVideoTracks().forEach((track) => {
       track.enabled = isVidOn == "on" ? false : true;
     });
@@ -135,13 +135,9 @@ export default function useMediaStream({
   }, [getConstraints, isFrontCamera, isMicOn]);
 
   const toggleMedia = useCallback(() => {
-    if (isMicOn) {
-      toggleMic();
-    }
-    if (isVidOn) {
-      toggleVideo()
-    }
-  }, []);
+    toggleMic();
+    toggleVid()
+  }, [toggleMic, toggleVid]);
 
   // --- Stop everything (always uses ref) ---
   const stop = useCallback(() => {
@@ -164,7 +160,7 @@ export default function useMediaStream({
     start: startInitialStream,
     stop,
     toggleMic,
-    toggleVideo,
+    toggleVid,
     toggleMedia,
     flipCamera,
     isMicOn,
