@@ -73,7 +73,7 @@ function StreamPage() {
     start: startMedia,
     stop: stopMedia,
     toggleMic,
-    toggleVideo,
+    toggleVid,
     toggleMedia,
     flipCamera,
     isMicOn,
@@ -398,7 +398,7 @@ function StreamPage() {
               </button>
 
               <button
-                onClick={toggleVideo}
+                onClick={toggleVid}
                 className="p-3 w-15 h-15 flex items-center justify-center"
                 style={{ transform: `rotate(-${rotateDeg}deg)` }}
                 aria-label={isVidOn === "on" ? "Stop Video" : "Start Video"}
