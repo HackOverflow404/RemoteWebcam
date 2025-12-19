@@ -284,7 +284,7 @@ function StreamPage() {
             height: rotateDeg == 0 ? "100dvh" : vp.w,
             objectFit: "cover",
           }}
-          className="absolute inset-0 object-cover z-0"
+          className="absolute inset-0 object-cover z-0 m-0 p-0"
         />
 
         {errorMessage && (
@@ -311,7 +311,7 @@ function StreamPage() {
             paddingLeft: safe.l,
           }}
         >
-          <header className={`flex absolute top-0 left-0 right-0 w-full py-5 justify-evenly z-10 ${rotateDeg == 0 ? "" : "mt-4"}`}>
+          <header className={`flex absolute top-0 left-0 right-0 w-full py-5 justify-evenly z-10 ${rotateDeg == 0 ? "" : "mt-6"}`}>
             <button
               onClick={handleBack}
               className="p-3"
