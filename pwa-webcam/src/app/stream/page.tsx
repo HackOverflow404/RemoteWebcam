@@ -311,7 +311,7 @@ function StreamPage() {
             paddingLeft: safe.l,
           }}
         >
-          <header className={`flex absolute top-0 left-0 right-0 w-full py-5 justify-evenly z-10 ${rotateDeg == 0 ? "" : "mt-6"}`}>
+          <header className={`flex absolute top-0 left-0 right-0 w-full py-5 justify-evenly z-10 ${rotateDeg == 0 ? "" : "mt-10"}`}>
             <button
               onClick={handleBack}
               className="p-3"
