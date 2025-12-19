@@ -284,7 +284,7 @@ function StreamPage() {
             height: rotateDeg == 0 ? "100dvh" : vp.w,
             objectFit: "cover",
           }}
-          className="absolute inset-0 object-cover z-0 m-0 p-0"
+          className="absolute inset-0 object-cover z-0 m-0 p-0 full-bleed"
         />
 
         {errorMessage && (

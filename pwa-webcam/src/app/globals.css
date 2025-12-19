@@ -26,6 +26,7 @@ html, body {
   height: 100%;
   width: 100%;
   overflow: hidden;
+  height: -webkit-fill-available;
 }
 
 :root {
@@ -40,4 +41,21 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: "Courier New", Courier, monospace;
+}
+
+.pwa-root {
+  position: fixed;
+  inset: 0;
+
+  /* Your background can go edge-to-edge; content should respect safe areas */
+  padding-top: var(--sat);
+  padding-right: var(--sar);
+  padding-bottom: var(--sab);
+  padding-left: var(--sal);
+}
+
+/* If you have a full-bleed background/video, let it ignore padding */
+.full-bleed {
+  position: absolute;
+  inset: 0;
 }
