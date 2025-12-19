@@ -278,10 +278,10 @@ function StreamPage() {
             if (newTrack && isStreamOn) replaceTrack("video", newTrack);
           }}
           style={{
-            transform: isFrontCamera ? "scaleX(-1)" : "scaleX(1)",
+            transform: `scale(${isFrontCamera ? "-" : ""}1, ${rotateDeg < 0 ? "-" : ""}1)`,
             transition: "opacity 0.3s ease",
-            width: vp.h,
-            height: vp.w,
+            width: rotateDeg == 0 ? "100dvw" : vp.h,
+            height: rotateDeg == 0 ? "100dvh" : vp.w,
             objectFit: "cover",
           }}
           className="absolute inset-0 object-cover z-0"
@@ -311,7 +311,7 @@ function StreamPage() {
             paddingLeft: safe.l,
           }}
         >
-          <header className={`flex absolute top-0 left-0 right-0 w-full py-5 justify-evenly z-10 ${rotateDeg == 0 ? "" : "mr-1"}`}>
+          <header className={`flex absolute top-0 left-0 right-0 w-full py-5 justify-evenly z-10 ${rotateDeg == 0 ? "" : "mr-4"}`}>
             <button
               onClick={handleBack}
               className="p-3"
@@ -322,7 +322,7 @@ function StreamPage() {
             </button>
 
             {sessionCode && (
-              <div className="bg-black bg-opacity-50 flex items-center justify-center text-white h-4 px-3 py-1 rounded-md">
+              <div className="bg-black bg-opacity-50 flex items-center justify-center text-white h-10 px-3 py-1 rounded-md">
                 Code: {sessionCode}
               </div>
             )}
