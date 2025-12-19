@@ -253,34 +253,6 @@ function StreamPage() {
     };
   }, [rotateDeg, vp.w, vp.h]);
 
-  const videoStyle = useMemo<React.CSSProperties>(() => {
-    const mirror = isFrontCamera ? -1 : 1;
-
-    if (rotateDeg === 0) {
-      return {
-        position: "fixed",
-        inset: 0,
-        width: "100dvw",
-        height: "100dvh",
-        objectFit: "cover",
-        transform: `scaleX(${mirror})`,
-        transformOrigin: "center",
-      };
-    }
-
-    // Rotate preview and swap dims so it still covers the screen
-    return {
-      position: "fixed",
-      top: "50%",
-      left: "50%",
-      width: vp.h,   // swapped
-      height: vp.w,  // swapped
-      objectFit: "cover",
-      transformOrigin: "center",
-      transform: `translate(-50%, -50%) rotate(${rotateDeg}deg) scaleX(${mirror})`,
-    };
-  }, [rotateDeg, vp.w, vp.h, isFrontCamera]);
-
   const handleBack = useCallback(() => {
     stopStream();
     router.push("/");
@@ -305,8 +277,14 @@ function StreamPage() {
             const newTrack = await flipCamera();
             if (newTrack && isStreamOn) replaceTrack("video", newTrack);
           }}
-          style={videoStyle}
-          className="z-0"
+          style={{
+            transform: isFrontCamera ? "scaleX(-1)" : "scaleX(1)",
+            transition: "opacity 0.3s ease",
+            width: vp.h,
+            height: vp.w,
+            objectFit: "cover",
+          }}
+          className="absolute inset-0 object-cover z-0"
         />
 
         {errorMessage && (
@@ -329,11 +307,11 @@ function StreamPage() {
           style={{
             paddingTop: safe.t,
             paddingRight: safe.r,
-            paddingBottom: safe.b,
+            paddingBottom: safe.b, // set to 0 if you *want* to go under home indicator
             paddingLeft: safe.l,
           }}
         >
-          <header className="flex absolute top-0 left-0 right-0 w-full py-5 justify-evenly z-10">
+          <header className={`flex absolute top-0 left-0 right-0 w-full py-5 justify-evenly z-10 ${rotateDeg == 0 ? "" : "mr-1"}`}>
             <button
               onClick={handleBack}
               className="p-3"
@@ -344,7 +322,7 @@ function StreamPage() {
             </button>
 
             {sessionCode && (
-              <div className="bg-black bg-opacity-50 flex items-center justify-center text-white px-3 py-1 rounded-md">
+              <div className="bg-black bg-opacity-50 flex items-center justify-center text-white h-4 px-3 py-1 rounded-md">
                 Code: {sessionCode}
               </div>
             )}
