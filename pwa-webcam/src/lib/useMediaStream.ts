@@ -45,27 +45,26 @@ export default function useMediaStream({
       video:
         videoState === "on"
           ? {
-            facingMode: facing,
-            frameRate: { ideal: Number(fps) },
-            width:
-              resolution === "sd"
-                ? { ideal: 640 }
-                : resolution === "hd"
+              facingMode: facing,
+              frameRate: { ideal: Number(fps) },
+              width:
+                resolution === "sd"
+                  ? { ideal: 640 }
+                  : resolution === "hd"
                   ? { ideal: 1280 }
                   : { ideal: 3840 },
-            height:
-              resolution === "sd"
-                ? { ideal: 480 }
-                : resolution === "hd"
+              height:
+                resolution === "sd"
+                  ? { ideal: 480 }
+                  : resolution === "hd"
                   ? { ideal: 720 }
                   : { ideal: 2160 },
-          }
+            }
           : false,
       audio: audioState === "on",
     }),
     [isVidOn, isMicOn, isFrontCamera, fps, resolution]
   );
-
 
   // --- Clean up utility ---
   const stopAllTracks = useCallback((s: MediaStream | null) => {
@@ -95,63 +94,20 @@ export default function useMediaStream({
     }
   }, [getConstraints]);
 
-  // --- Replace track (memoized, always uses ref) ---
-  const replaceTrack = useCallback(
-    async (
-      type: "video" | "audio",
-      state: MediaState,
-      facingOverride?: boolean
-    ) => {
-      const currentStream = streamRef.current;
-      if (!currentStream) return;
-
-      const facingMode: "user" | "environment" =
-        facingOverride ?? isFrontCamera ? "user" : "environment";
-
-      const newStream = await navigator.mediaDevices.getUserMedia(
-        getConstraints(
-          type === "video" ? state : isVidOn,
-          type === "audio" ? state : isMicOn,
-          facingMode
-        )
-      );
-
-      // Stop and remove old tracks of this type
-      currentStream.getTracks().forEach((track) => {
-        if (track.kind === type) {
-          track.stop();
-          currentStream.removeTrack(track);
-        }
-      });
-
-      // Add new track(s) of this type
-      const newTracks =
-        type === "video"
-          ? newStream.getVideoTracks()
-          : newStream.getAudioTracks();
-      newTracks.forEach((track) => currentStream.addTrack(track));
-
-      if (videoRef.current) videoRef.current.srcObject = currentStream;
-
-      if (type === "video") setIsVidOn(newTracks.length ? "on" : "off");
-      else setIsMicOn(newTracks.length ? "on" : "off");
-
-      // Clean up extra tracks in newStream
-      //   stopAllTracks(newStream);
-    },
-    [getConstraints, isVidOn, isMicOn, isFrontCamera, stopAllTracks]
-  );
-
   // --- Toggle mic/video/camera (all use stable handlers) ---
   const toggleMic = useCallback(() => {
-    const newState: MediaState = isMicOn === "on" ? "off" : "on";
-    replaceTrack("audio", newState);
-  }, [isMicOn, replaceTrack]);
+    streamRef.current?.getAudioTracks().forEach((track) => {
+      track.enabled = isMicOn == "on" ? false : true;
+    });
+    setIsMicOn(() => (isMicOn === "on" ? "off" : "on"));
+  }, [isMicOn]);
 
   const toggleVideo = useCallback(() => {
-    const newState: MediaState = isVidOn === "on" ? "off" : "on";
-    replaceTrack("video", newState);
-  }, [isVidOn, replaceTrack]);
+    streamRef.current?.getVideoTracks().forEach((track) => {
+      track.enabled = isVidOn == "on" ? false : true;
+    });
+    setIsVidOn(() => (isVidOn === "on" ? "off" : "on"));
+  }, [isVidOn]);
 
   const flipCamera = useCallback(async (): Promise<MediaStreamTrack | null> => {
     const newFacing = !isFrontCamera;
@@ -175,8 +131,17 @@ export default function useMediaStream({
       videoRef.current.srcObject = streamRef.current;
     }
 
-    return newVideoTrack; // 🔑 IMPORTANT
+    return newVideoTrack;
   }, [getConstraints, isFrontCamera, isMicOn]);
+
+  const toggleStream = useCallback(() => {
+    if (isMicOn) {
+      toggleMic();
+    }
+    if (isVidOn) {
+      toggleVideo()
+    }
+  }, []);
 
   // --- Stop everything (always uses ref) ---
   const stop = useCallback(() => {

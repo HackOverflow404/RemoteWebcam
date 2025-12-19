@@ -74,6 +74,7 @@ function StreamPage() {
     stop: stopMedia,
     toggleMic,
     toggleVideo,
+    toggleMedia,
     flipCamera,
     isMicOn,
     isVidOn,
@@ -93,8 +94,6 @@ function StreamPage() {
     stopStream,
     replaceTrack,
     handleRotate,
-    pauseStream,
-    resumeStream,
     isStreamOn,
     connectionStatus,
     error: RTCStreamError,
@@ -261,7 +260,13 @@ function StreamPage() {
   }, [stopStream, router]);
 
   return (
-    <section className="fixed inset-0 overflow-hidden bg-black">
+    <section
+      className="fixed inset-0 overflow-hidden bg-black"
+      onDoubleClick={async () => {
+        console.log("Double tap registered");
+        const newTrack = await flipCamera();
+        if (newTrack && isStreamOn) replaceTrack("video", newTrack);
+      }}>
       <div style={stageStyle}>
         {isLoadingMedia && (
           <div className="absolute inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 pointer-events-none">
@@ -275,11 +280,6 @@ function StreamPage() {
           playsInline
           muted
           controls={false}
-          onDoubleClick={async () => {
-            console.log("Double tap registered");
-            const newTrack = await flipCamera();
-            if (newTrack && isStreamOn) replaceTrack("video", newTrack);
-          }}
           style={{
             transform: `scale(${isFrontCamera ? "-" : ""}1, ${rotateDeg < 0 ? "-" : ""}1)`,
             transition: "opacity 0.3s ease",
@@ -377,7 +377,7 @@ function StreamPage() {
               </button>
 
               <button
-                onClick={isStreamOn ? pauseStream : resumeStream}
+                onClick={toggleMedia}
                 className={`p-3 w-15 h-15 flex items-center justify-center ${isStreamOn
                   ? "text-red-500"
                   : connectionStatus === "connecting"

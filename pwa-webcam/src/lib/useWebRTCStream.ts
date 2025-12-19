@@ -307,30 +307,6 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     cleanup("user stop");
   }, [cleanup]);
 
-  const pauseStream = useCallback(() => {
-    const { media } = propsRef.current;
-    if (!media) {
-      log("pauseStream(): media is already off");
-      return;
-    }
-    
-    media.getTracks().forEach((track) => {
-      track.enabled = false;
-    });
-  }, []);
-
-  const resumeStream = useCallback(() => {
-    const { media } = propsRef.current;
-    if (!media) {
-      log("pauseStream(): media is already off");
-      return;
-    }
-
-    media.getTracks().forEach((track) => {
-      track.enabled = true;
-    });
-  }, []);
-
   const replaceTrack = useCallback(
     async (kind: "video" | "audio", track: MediaStreamTrack | null) => {
       const pc = peerRef.current;
@@ -370,7 +346,5 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     replaceTrack,
     startStream,
     stopStream,
-    pauseStream,
-    resumeStream,
   };
 }
