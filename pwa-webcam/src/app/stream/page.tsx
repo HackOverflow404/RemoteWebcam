@@ -253,6 +253,34 @@ function StreamPage() {
     };
   }, [rotateDeg, vp.w, vp.h]);
 
+  const videoStyle = useMemo<React.CSSProperties>(() => {
+    const mirror = isFrontCamera ? -1 : 1;
+
+    if (rotateDeg === 0) {
+      return {
+        position: "fixed",
+        inset: 0,
+        width: "100dvw",
+        height: "100dvh",
+        objectFit: "cover",
+        transform: `scaleX(${mirror})`,
+        transformOrigin: "center",
+      };
+    }
+
+    // Rotate preview and swap dims so it still covers the screen
+    return {
+      position: "fixed",
+      top: "50%",
+      left: "50%",
+      width: vp.h,   // swapped
+      height: vp.w,  // swapped
+      objectFit: "cover",
+      transformOrigin: "center",
+      transform: `translate(-50%, -50%) rotate(${rotateDeg}deg) scaleX(${mirror})`,
+    };
+  }, [rotateDeg, vp.w, vp.h, isFrontCamera]);
+
   const handleBack = useCallback(() => {
     stopStream();
     router.push("/");
@@ -277,11 +305,8 @@ function StreamPage() {
             const newTrack = await flipCamera();
             if (newTrack && isStreamOn) replaceTrack("video", newTrack);
           }}
-          style={{
-            transform: isFrontCamera ? "scaleX(-1)" : "scaleX(1)",
-            transition: "opacity 0.3s ease",
-          }}
-          className="absolute inset-0 w-full h-full object-cover z-0"
+          style={videoStyle}
+          className="z-0"
         />
 
         {errorMessage && (
@@ -304,7 +329,7 @@ function StreamPage() {
           style={{
             paddingTop: safe.t,
             paddingRight: safe.r,
-            paddingBottom: safe.b, // set to 0 if you *want* to go under home indicator
+            paddingBottom: safe.b,
             paddingLeft: safe.l,
           }}
         >
@@ -317,6 +342,12 @@ function StreamPage() {
             >
               <span className="material-symbols-outlined">keyboard_return</span>
             </button>
+
+            {sessionCode && (
+              <div className="bg-black bg-opacity-50 flex items-center justify-center text-white px-3 py-1 rounded-md">
+                Code: {sessionCode}
+              </div>
+            )}
 
             <div
               className={`flex items-center ${connectionStatus === "connected"
@@ -337,11 +368,6 @@ function StreamPage() {
               </span>
             </div>
 
-            {sessionCode && (
-              <div className="bg-black bg-opacity-50 text-white px-3 py-1 rounded-md">
-                Code: {sessionCode}
-              </div>
-            )}
           </header>
 
           {/* Bottom settings */}
