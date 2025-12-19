@@ -280,14 +280,11 @@ function StreamPage() {
           style={{
             transform: `scale(${isFrontCamera ? "-" : ""}1, ${rotateDeg < 0 ? "-" : ""}1)`,
             transition: "opacity 0.3s ease",
-            width: "100%",
-            height: "100%",
+            width: rotateDeg == 0 ? "100dvw" : vp.h,
+            height: rotateDeg == 0 ? "100dvh" : vp.w,
             objectFit: "cover",
-            position: "absolute",
-            top: 0,
-            left: 0,
           }}
-          className="z-0 m-0 p-0"
+          className="absolute inset-0 object-cover z-0 m-0 p-0"
         />
 
         {errorMessage && (
@@ -310,11 +307,11 @@ function StreamPage() {
           style={{
             paddingTop: safe.t,
             paddingRight: safe.r,
-            paddingBottom: rotateDeg === 0 ? Math.max(safe.b - 20, 0) : safe.b,
+            paddingBottom: safe.b,
             paddingLeft: safe.l,
           }}
         >
-          <header className="flex absolute top-0 left-0 right-0 w-full py-5 justify-evenly z-10">
+          <header className={`flex absolute top-0 left-0 right-0 w-full py-5 justify-evenly z-10 ${rotateDeg == 0 ? "" : "mt-10"}`}>
             <button
               onClick={handleBack}
               className="p-3"
@@ -352,7 +349,7 @@ function StreamPage() {
           </header>
 
           {/* Bottom settings */}
-          <footer className="flex flex-col absolute bottom-0 left-0 right-0 w-full py-4 pb-6 justify-evenly z-10">
+          <footer className="flex flex-col absolute bottom-0 left-0 right-0 w-full py-4 justify-evenly z-10">
             {isMicOn === "on" && media && media.getAudioTracks().length > 0 && (
               <React.Suspense fallback={<div>Loading Mic Volume...</div>}>
                 <AudioVolumeIndicator isEnabled={true} mediaStream={media} />
