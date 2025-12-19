@@ -134,7 +134,7 @@ export default function useMediaStream({
     return newVideoTrack;
   }, [getConstraints, isFrontCamera, isMicOn]);
 
-  const toggleStream = useCallback(() => {
+  const toggleMedia = useCallback(() => {
     if (isMicOn) {
       toggleMic();
     }
@@ -165,6 +165,7 @@ export default function useMediaStream({
     stop,
     toggleMic,
     toggleVideo,
+    toggleMedia,
     flipCamera,
     isMicOn,
     isVidOn,
