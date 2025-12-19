@@ -128,7 +128,9 @@ function StreamPage() {
 
     const screenAngle = (window.screen?.orientation?.angle ?? 0) as number;
     const legacyAngle =
-      typeof (window as any).orientation === "number" ? (window as any).orientation : 0;
+      typeof (window as any).orientation === "number"
+        ? (window as any).orientation
+        : 0;
 
     const angle = screenAngle || legacyAngle || 0;
     return angle === -90 || angle === 270 ? -90 : 90;
@@ -149,7 +151,7 @@ function StreamPage() {
       setRotateDeg(rot);
 
       if (raf) cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => handleRotate(w, h)); // rotates the outgoing processed track
+      raf = requestAnimationFrame(() => handleRotate(w, h));
     };
 
     recompute();
@@ -182,13 +184,12 @@ function StreamPage() {
       };
     }
 
-    // Rotate preview and swap dims so it still covers the screen
     return {
       position: "fixed",
       top: "50%",
       left: "50%",
-      width: vp.h,   // swapped
-      height: vp.w,  // swapped
+      width: vp.h,
+      height: vp.w,
       objectFit: "cover",
       transformOrigin: "center",
       transform: `translate(-50%, -50%) rotate(${rotateDeg}deg) scaleX(${mirror})`,
@@ -204,6 +205,77 @@ function StreamPage() {
   const insetRight = "env(safe-area-inset-right)";
   const insetBottom = "env(safe-area-inset-bottom)";
   const insetLeft = "env(safe-area-inset-left)";
+
+  const isLandscape = rotateDeg !== 0;
+
+  // These are the "thickness" of the side bars in landscape.
+  const HEADER_THICKNESS = 56;
+  const FOOTER_THICKNESS = 120;
+
+  // Counter-rotate *individual* elements (icons/text) so they read upright
+  const counterRotateStyle = useMemo<React.CSSProperties>(() => {
+    if (rotateDeg === 0) return {};
+    return { transform: `rotate(${-rotateDeg}deg)` };
+  }, [rotateDeg]);
+
+  // Header positioning: portrait = top, landscape = right side (rotated)
+  const headerPosStyle = useMemo<React.CSSProperties>(() => {
+    if (!isLandscape) {
+      return {
+        position: "absolute",
+        left: 0,
+        right: 0,
+        top: `calc(${insetTop} + 10px)`,
+        paddingLeft: `calc(${insetLeft} + 10px)`,
+        paddingRight: `calc(${insetRight} + 10px)`,
+      };
+    }
+
+    return {
+      position: "fixed",
+      top: "50%",
+      left: `calc(100% - (${insetRight} + 10px) - ${HEADER_THICKNESS / 2}px)`,
+      width: `calc(100dvh - ${insetTop} - ${insetBottom} - 20px)`,
+      height: `${HEADER_THICKNESS}px`,
+      transform: `translate(-50%, -50%) rotate(${rotateDeg}deg)`,
+      transformOrigin: "center",
+      paddingLeft: `calc(${insetTop} + 10px)`,
+      paddingRight: `calc(${insetBottom} + 10px)`,
+    };
+  }, [
+    isLandscape,
+    rotateDeg,
+    insetTop,
+    insetRight,
+    insetBottom,
+    insetLeft,
+  ]);
+
+  // Footer positioning: portrait = bottom, landscape = left side (rotated)
+  const footerPosStyle = useMemo<React.CSSProperties>(() => {
+    if (!isLandscape) {
+      return {
+        position: "absolute",
+        left: 0,
+        right: 0,
+        bottom: `calc(${insetBottom} + 12px)`,
+        paddingLeft: `calc(${insetLeft} + 10px)`,
+        paddingRight: `calc(${insetRight} + 10px)`,
+      };
+    }
+
+    return {
+      position: "fixed",
+      top: "50%",
+      left: `calc(${insetLeft} + 10px + ${FOOTER_THICKNESS / 2}px)`,
+      width: `calc(100dvh - ${insetTop} - ${insetBottom} - 20px)`,
+      height: `${FOOTER_THICKNESS}px`,
+      transform: `translate(-50%, -50%) rotate(${rotateDeg}deg)`,
+      transformOrigin: "center",
+      paddingLeft: `calc(${insetTop} + 10px)`,
+      paddingRight: `calc(${insetBottom} + 10px)`,
+    };
+  }, [isLandscape, rotateDeg, insetTop, insetBottom, insetLeft, insetRight]);
 
   return (
     <section className="fixed inset-0 overflow-hidden bg-black">
@@ -222,7 +294,7 @@ function StreamPage() {
         className="z-0"
       />
 
-      {/* UI OVERLAY (NOT rotated) */}
+      {/* UI OVERLAY */}
       <div className="fixed inset-0 z-10">
         {isLoadingMedia && (
           <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-50">
@@ -230,54 +302,64 @@ function StreamPage() {
           </div>
         )}
 
-        {/* TOP BAR: grid keeps Code perfectly centered */}
-        <div
-          className="absolute left-0 right-0 grid grid-cols-[auto,1fr,auto] items-center"
-          style={{
-            top: `calc(${insetTop} + 10px)`,
-            paddingLeft: `calc(${insetLeft} + 10px)`,
-            paddingRight: `calc(${insetRight} + 10px)`,
-          }}
-        >
-          <button
-            onClick={handleBack}
-            className="p-2 bg-black/40 rounded-lg text-white"
-            aria-label="Back"
-          >
-            <span className="material-symbols-outlined">arrow_back</span>
-          </button>
+        {/* HEADER (top in portrait, right in landscape) */}
+        <header style={headerPosStyle} className="z-20">
+          <div className="h-full w-full bg-black/45 backdrop-blur-md rounded-2xl shadow-lg px-3 py-2 grid grid-cols-[auto,1fr,auto] items-center gap-3">
+            <button
+              onClick={handleBack}
+              className="shrink-0 p-2 rounded-xl bg-black/30 text-white active:scale-95 transition"
+              aria-label="Back"
+            >
+              <span
+                className="material-symbols-outlined inline-flex"
+                style={{ ...counterRotateStyle, fontSize: 26 }}
+              >
+                arrow_back
+              </span>
+            </button>
 
-          <div className="flex justify-center">
-            {sessionCode && (
-              <div className="bg-black/50 text-white px-3 py-1 rounded-md">
-                Code: {sessionCode}
-              </div>
-            )}
-          </div>
+            {/* Center: keep it one line, truncate if needed */}
+            <div className="min-w-0 flex justify-center">
+              {sessionCode && (
+                <div className="min-w-0 max-w-full bg-black/35 text-white rounded-xl px-3 py-1.5">
+                  <span
+                    className="block text-sm font-medium font-mono tracking-widest truncate"
+                    style={counterRotateStyle}
+                    title={sessionCode}
+                  >
+                    CODE {sessionCode}
+                  </span>
+                </div>
+              )}
+            </div>
 
-          <div
-            className={`flex items-center justify-end gap-2 ${
-              connectionStatus === "connected"
-                ? "text-green-500"
-                : connectionStatus === "connecting"
-                ? "text-yellow-500"
-                : connectionStatus === "disconnected"
-                ? "text-gray-300"
-                : "text-red-500"
-            }`}
-          >
-            <span className="material-symbols-outlined">
-              {icons.connection[connectionStatus]}
-            </span>
-            <span>
-              {connectionStatus.charAt(0).toUpperCase() + connectionStatus.slice(1)}
-            </span>
+            <div
+              className={`shrink-0 flex items-center justify-end gap-2 whitespace-nowrap text-sm font-medium ${connectionStatus === "connected"
+                  ? "text-green-400"
+                  : connectionStatus === "connecting"
+                    ? "text-yellow-300"
+                    : connectionStatus === "disconnected"
+                      ? "text-gray-300"
+                      : "text-red-400"
+                }`}
+            >
+              <span
+                className="material-symbols-outlined inline-flex"
+                style={{ ...counterRotateStyle, fontSize: 22 }}
+              >
+                {icons.connection[connectionStatus]}
+              </span>
+              <span style={counterRotateStyle}>
+                {connectionStatus.charAt(0).toUpperCase() +
+                  connectionStatus.slice(1)}
+              </span>
+            </div>
           </div>
-        </div>
+        </header>
 
         {errorMessage && (
           <div
-            className="absolute left-0 right-0 flex justify-center"
+            className="absolute left-0 right-0 flex justify-center z-30"
             style={{ top: `calc(${insetTop} + 64px)` }}
           >
             <div className="bg-red-500 text-white px-4 py-2 rounded-md">
@@ -286,63 +368,75 @@ function StreamPage() {
           </div>
         )}
 
-        {/* MIC VOLUME + CONTROLS */}
-        <div
-          className="absolute left-0 right-0 flex flex-col items-center gap-3"
-          style={{
-            bottom: `calc(${insetBottom} + 12px)`,
-            paddingLeft: `calc(${insetLeft} + 10px)`,
-            paddingRight: `calc(${insetRight} + 10px)`,
-          }}
-        >
-          {isMicOn === "on" && media && media.getAudioTracks().length > 0 && (
-            <React.Suspense fallback={null}>
-              <AudioVolumeIndicator isEnabled={true} mediaStream={media} />
-            </React.Suspense>
-          )}
+        {/* FOOTER (bottom in portrait, left in landscape) */}
+        <div style={footerPosStyle} className="z-20">
+          <div className="h-full w-full bg-black/45 backdrop-blur-md rounded-3xl shadow-lg px-4 py-3 flex flex-col items-center justify-center gap-3">
+            {/* Volume indicator */}
+            {isMicOn === "on" && media && media.getAudioTracks().length > 0 && (
+              <div style={counterRotateStyle}>
+                <React.Suspense fallback={null}>
+                  <AudioVolumeIndicator isEnabled={true} mediaStream={media} />
+                </React.Suspense>
+              </div>
+            )}
 
-          <div className="w-full grid grid-cols-3 items-center">
-            <button
-              onClick={toggleMic}
-              className="p-3 flex items-center justify-center"
-              aria-label={isMicOn === "on" ? "Mute Microphone" : "Unmute Microphone"}
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: 40 }}>
-                {icons.microphone[isMicOn]}
-              </span>
-            </button>
+            {/* Controls row (becomes a vertical stack visually once the footer is rotated) */}
+            <div className="w-full grid grid-cols-3 items-center">
+              <button
+                onClick={toggleMic}
+                className="p-3 flex items-center justify-center active:scale-95 transition"
+                aria-label={
+                  isMicOn === "on" ? "Mute Microphone" : "Unmute Microphone"
+                }
+              >
+                <span
+                  className="material-symbols-outlined inline-flex"
+                  style={{ ...counterRotateStyle, fontSize: 40 }}
+                >
+                  {icons.microphone[isMicOn]}
+                </span>
+              </button>
 
-            <button
-              onClick={isStreamOn ? stopStream : startStream}
-              className={`p-3 flex items-center justify-center ${
-                isStreamOn
-                  ? "text-red-500"
-                  : connectionStatus === "connecting"
-                  ? "text-yellow-500"
-                  : "text-green-500"
-              }`}
-              aria-label={isStreamOn ? "Stop Streaming" : "Start Streaming"}
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: 80 }}>
-                {isStreamOn ? "radio_button_checked" : "radio_button_unchecked"}
-              </span>
-            </button>
+              <button
+                onClick={isStreamOn ? stopStream : startStream}
+                className={`p-3 flex items-center justify-center active:scale-95 transition ${isStreamOn
+                    ? "text-red-400"
+                    : connectionStatus === "connecting"
+                      ? "text-yellow-300"
+                      : "text-green-400"
+                  }`}
+                aria-label={isStreamOn ? "Stop Streaming" : "Start Streaming"}
+              >
+                <span
+                  className="material-symbols-outlined inline-flex"
+                  style={{ ...counterRotateStyle, fontSize: 82, lineHeight: 1 }}
+                >
+                  {isStreamOn
+                    ? "radio_button_checked"
+                    : "radio_button_unchecked"}
+                </span>
+              </button>
 
-            <button
-              onClick={toggleVideo}
-              className="p-3 flex items-center justify-center"
-              aria-label={isVidOn === "on" ? "Stop Video" : "Start Video"}
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: 40 }}>
-                {icons.video[isVidOn]}
-              </span>
-            </button>
+              <button
+                onClick={toggleVideo}
+                className="p-3 flex items-center justify-center active:scale-95 transition"
+                aria-label={isVidOn === "on" ? "Stop Video" : "Start Video"}
+              >
+                <span
+                  className="material-symbols-outlined inline-flex"
+                  style={{ ...counterRotateStyle, fontSize: 40 }}
+                >
+                  {icons.video[isVidOn]}
+                </span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
     </section>
   );
 }
+
 
 export default function Page() {
   return (
