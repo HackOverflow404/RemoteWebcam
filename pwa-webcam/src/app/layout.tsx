@@ -36,12 +36,13 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
                     content="black-translucent"
                 />
                 <link rel="apple-touch-icon" href="/icons/icon-192x192.png" />
-                <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
             </head>
             <body className="antialiased">
-                <SWRegister />
-                <NetworkStatus />
-                {children}
+                <div className="pwa-root">
+                    <SWRegister />
+                    <NetworkStatus />
+                    {children}
+                </div>
             </body>
         </html>
     );
