@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpacerItem,
     QSystemTrayIcon,
-    QMenu
+    QMenu,
 )
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QFont, QIcon, QImage, QPixmap
@@ -27,7 +27,7 @@ class PixelStreamerApp(QMainWindow):
         self.worker = None
         self.poll_timer = None
         self.initUI()
-    
+
     def initUI(self):
         with open("./assets/style.qss", "r") as f:
             self.setStyleSheet(f.read())
@@ -35,7 +35,6 @@ class PixelStreamerApp(QMainWindow):
         self.setWindowTitle("PixelStreamer")
         self.setGeometry(100, 100, 256, 160)
         self.font = QFont("Courier New")
-        
 
         central_widget = QWidget()
         main_layout = QHBoxLayout()
@@ -89,7 +88,7 @@ class PixelStreamerApp(QMainWindow):
         self.preview_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.preview_frame.setObjectName("previewFrame")
         preview_label.setBuddy(self.preview_frame)
-        
+
         self.video_label = QLabel()
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -147,9 +146,7 @@ class PixelStreamerApp(QMainWindow):
         button.setText(self.code)
         button.setEnabled(True)
         if self.code != "Error":
-            self.worker = WebRTCWorker(
-                code=self.code, widget_win_id=int(self.preview_frame.winId())
-            )
+            self.worker = WebRTCWorker(code=self.code)
             self.worker.connection_state_changed.connect(self.update_connection_status)
             self.worker.video_frame_received.connect(self.on_frame)
             self.worker.start()
@@ -174,9 +171,7 @@ class PixelStreamerApp(QMainWindow):
         if state == ConnectionState.DISCONNECTED:
             self.reset_session_ui()
 
-        self.connection_status.setText(
-            f"Connection: {state.value.capitalize()}"
-        )
+        self.connection_status.setText(f"Connection: {state.value.capitalize()}")
         self.connection_status.setStyleSheet(f"color: {color_map[state]}")
 
     @Slot(object)
@@ -199,11 +194,11 @@ class PixelStreamerApp(QMainWindow):
         ).copy()  # ✅ detach from numpy memory
 
         self.video_label.setPixmap(QPixmap.fromImage(image))
-    
+
     def reset_session_ui(self):
         if not self.worker:
             return
-        
+
         self.worker.stop()
         self.worker = None
 

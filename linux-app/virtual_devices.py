@@ -6,291 +6,190 @@ import cv2
 import subprocess
 import queue
 import numpy as np
-
+import shlex
 
 class VirtualCamThread(threading.Thread):
-    def __init__(self, frame_queue, running_flag, width=1280, height=720, fps=20):
+    def __init__(self, frame_queue, running_flag, width, height, fps=60):
         super().__init__(daemon=True)
-        self.frame_queue = frame_queue
-        self.running_flag = running_flag
-        self.fps = fps
         self.cam = None
-        self.width = width
-        self.height = height
+        self.q = frame_queue
+        self.running_flag = running_flag
+        self.width, self.height, self.fps = width, height, fps
 
     def run(self):
         try:
-            # Create camera ONCE with fixed resolution
-            self.cam = pyvirtualcam.Camera(
-                width=self.width,
-                height=self.height,
-                fps=self.fps,
-                fmt=PixelFormat.YUYV,
-                print_fps=True,
-            )
-            print("[VirtualCam] Device:", self.cam.device)
+            last = np.zeros((self.height, self.width, 3), dtype=np.uint8)  # black until first frame
 
-            while self.running_flag():
-                if not self.frame_queue:
-                    time.sleep(0.005)
-                    continue
+            with pyvirtualcam.Camera(
+                width=self.width, height=self.height, fps=self.fps,
+                fmt=PixelFormat.BGR, print_fps=True
+            ) as self.cam:
+                while self.running_flag():
+                    # Keep only the newest frame (drop backlog)
+                    try:
+                        while True:
+                            last = self.q.get_nowait()
+                    except queue.Empty:
+                        pass
 
-                img = self.frame_queue.popleft()
-
-                if img.shape[1] != self.width or img.shape[0] != self.height:
-                    img = cv2.resize(img, (self.width, self.height))
-
-                # Convert BGR → YUYV
-                img_yuyv = cv2.cvtColor(img, cv2.COLOR_BGR2YUV_YUY2)
-
-                self.cam.send(img_yuyv)
-                self.cam.sleep_until_next_frame()
+                    if last.shape[1] != self.width or last.shape[0] != self.height:
+                        last = cv2.resize(last, (self.width, self.height), interpolation=cv2.INTER_LINEAR)
+                    self.cam.send(last)
+                    self.cam.sleep_until_next_frame()
 
         finally:
             if self.cam:
                 self.cam.close()
                 print("[VirtualCam] Closed")
 
-
-
-
-def _run(cmd):
-    return subprocess.run(cmd, check=False, capture_output=True, text=True)
-
-
-def _pactl_has(kind: str, name: str) -> bool:
-    # kind: "sinks" or "sources"
-    r = _run(["pactl", "list", "short", kind])
-    if r.returncode != 0:
-        return False
-    for line in r.stdout.splitlines():
-        # columns: index \t name \t driver \t ...
-        parts = line.split("\t")
-        if len(parts) >= 2 and parts[1].strip() == name:
-            return True
-    return False
-
-
-def _pactl_load_module(args: list[str]) -> int | None:
-    r = _run(["pactl", "load-module", *args])
-    if r.returncode != 0:
-        return None
-    # pactl prints module id on stdout
-    try:
-        return int(r.stdout.strip())
-    except Exception:
-        return None
-
-
-def _wpctl_find_node_id_by_name(name: str) -> str | None:
-    """
-    Try to resolve a PipeWire node id for pw-cat --target.
-    We search wpctl status output for an exact-ish sink match.
-    """
-    r = _run(["wpctl", "status"])
-    if r.returncode != 0:
-        return None
-
-    lines = r.stdout.splitlines()
-
-    in_sinks = False
-    for ln in lines:
-        if "Sinks:" in ln:
-            in_sinks = True
-            continue
-        if in_sinks and ("Sources:" in ln or "Sink endpoints:" in ln or "Clients:" in ln):
-            in_sinks = False
-        if not in_sinks:
-            continue
-
-        # Typical format: "  * 45. PixelStreamer_Sink [vol: ...]"
-        # or:           "    45. pixel_streamer_sink"
-        s = ln.strip()
-        if not s:
-            continue
-
-        # Pull leading id like "45." or "* 45."
-        s2 = s.lstrip("*").strip()
-        if "." not in s2:
-            continue
-
-        id_part, rest = s2.split(".", 1)
-        id_part = id_part.strip()
-        rest = rest.strip()
-
-        if not id_part.isdigit():
-            continue
-
-        # match either the sink_name or the description containing it
-        if name in rest:
-            return id_part
-
-    return None
-
-
 class VirtualMicThread(threading.Thread):
-    """
-    Streams audio frames into a virtual sink, and exposes a virtual mic source.
-
-    - Creates (if missing):
-        * null sink:   <sink_name>
-        * remap source <mic_name> that uses master=<sink_name>.monitor
-
-    - Sends audio to <sink_name> using pw-cat in playback mode.
-
-    Apps should pick <mic_name> as the microphone.
-    """
-    def __init__(
-        self,
-        audio_queue: "queue.Queue",
-        running_flag,
-        sink_name: str = "pixel_streamer_sink",
-        mic_name: str = "pixel_streamer_mic",
-        sample_rate: int = 48000,
-        channels: int = 2,
-        latency_ms: int = 50,
-    ):
+    def __init__(self, audio_queue: "queue.Queue", running_flag, rate=48000, channels=2):
         super().__init__(daemon=True)
         self.audio_queue = audio_queue
         self.running_flag = running_flag
-        self.sink_name = sink_name
-        self.mic_name = mic_name
-        self.sample_rate = sample_rate
+        self.rate = rate
         self.channels = channels
-        self.latency_ms = latency_ms
 
-        self._proc = None
-        self._mod_sink = None
-        self._mod_mic = None
+        self.sink_name = "pixel_mic_sink"
+        self.source_name = "pixel_mic"
 
-    def _ensure_virtual_devices(self):
-        # Create virtual sink if missing
-        if not _pactl_has("sinks", self.sink_name):
-            self._mod_sink = _pactl_load_module([
-                "module-null-sink",
-                f"sink_name={self.sink_name}",
-                'sink_properties=device.description=PixelStreamer_Sink',
-            ])
-            if self._mod_sink is None:
-                raise RuntimeError("Failed to load module-null-sink (is pipewire-pulse/pulseaudio running?)")
+        self._mod_sink_id = None
+        self._mod_source_id = None
+        self._pwcat = None
 
-        # Create virtual mic (remap source from sink monitor) if missing
-        if not _pactl_has("sources", self.mic_name):
-            self._mod_mic = _pactl_load_module([
-                "module-remap-source",
-                f"master={self.sink_name}.monitor",
-                f"source_name={self.mic_name}",
-                'source_properties=device.description=PixelStreamer_Mic',
-            ])
-            if self._mod_mic is None:
-                raise RuntimeError("Failed to load module-remap-source")
+    # ---------- PipeWire/Pulse module helpers ----------
+    def _pactl_load(self, args: str) -> int:
+        # returns module id (int)
+        out = subprocess.check_output(["pactl", "load-module"] + shlex.split(args), text=True)
+        return int(out.strip())
 
-    def _start_pwcat(self):
-        # pw-cat --target accepts node.name or object.serial; try id first, fall back to sink name
-        target = _wpctl_find_node_id_by_name(self.sink_name) or self.sink_name
+    def _pactl_unload(self, mod_id: int) -> None:
+        if mod_id is None:
+            return
+        try:
+            subprocess.check_call(["pactl", "unload-module", str(mod_id)])
+        except Exception:
+            pass
 
-        self._proc = subprocess.Popen(
-            [
-                "pw-cat",
-                "--playback",
-                "--format", "f32",                 # valid: u8/s8/s16/s24/s32/f32/f64 :contentReference[oaicite:2]{index=2}
-                "--rate", str(self.sample_rate),
-                "--channels", str(self.channels),
-                "--latency", f"{self.latency_ms}ms",
-                "--target", str(target),           # node.name or id/serial :contentReference[oaicite:3]{index=3}
-                "-",                               # read raw PCM from stdin
-            ],
-            stdin=subprocess.PIPE,
-            bufsize=0,  # unbuffered for lower latency
+    def _setup_virtual_mic(self):
+        # 1) null sink
+        self._mod_sink_id = self._pactl_load(
+            f"module-null-sink sink_name={self.sink_name} "
+            f'sink_properties=device.description="PixelStreamer Mic Sink" '
+            f"rate={self.rate} channels={self.channels} channel_map=stereo"
+        )
+        # 2) remap source from sink.monitor
+        self._mod_source_id = self._pactl_load(
+            f"module-remap-source master={self.sink_name}.monitor "
+            f"source_name={self.source_name} "
+            f'source_properties=device.description="PixelStreamer Virtual Mic" '
+            f"rate={self.rate} channels={self.channels} channel_map=stereo"
         )
 
-        print(f"[VirtualMic] pw-cat -> target={target} (sink={self.sink_name}, mic={self.mic_name})")
+    def _teardown_virtual_mic(self):
+        self._pactl_unload(self._mod_source_id)
+        self._pactl_unload(self._mod_sink_id)
+        self._mod_source_id = None
+        self._mod_sink_id = None
 
-    @staticmethod
-    def _to_f32_interleaved(frame: np.ndarray, channels: int) -> bytes:
-        # Accept: (N,), (N,1), (N,2), (2,N) etc.
-        x = np.asarray(frame)
+    # ---------- audio conversion ----------
+    def _to_interleaved_s16_stereo(self, pcm: np.ndarray) -> bytes:
+        """
+        Accepts common shapes:
+          - (channels, samples)  (planar)
+          - (samples, channels)  (interleaved)
+          - (samples,) mono
+        Accepts int16 or float32. If float looks normalized [-1,1], scale to int16.
+        """
+        a = np.asarray(pcm)
 
-        if x.ndim == 1:
-            x = x.reshape(-1, 1)
-
-        # If shape is (C, N), transpose to (N, C)
-        if x.shape[0] in (1, 2, 6, 8) and x.shape[1] > x.shape[0] and x.shape[1] > 64:
-            # heuristic: treat as (C,N)
-            if x.shape[0] <= 8:
-                x = x.T
-
-        # Now x is (N, C?)
-        if x.shape[1] == 1 and channels == 2:
-            x = np.repeat(x, 2, axis=1)
-        elif x.shape[1] != channels:
-            # Simple fallback: up/down-mix by truncation or repetition
-            if x.shape[1] > channels:
-                x = x[:, :channels]
-            else:
-                x = np.repeat(x, channels, axis=1)
-
-        # Convert to float32 in [-1, 1] if it looks like int16 PCM
-        if np.issubdtype(x.dtype, np.integer):
-            # assume int16-ish
-            x = x.astype(np.float32) / 32768.0
+        # Make it (samples, channels)
+        if a.ndim == 1:
+            a = a[:, None]  # (samples, 1)
+        elif a.ndim == 2:
+            # Heuristic: if first dim is small (1/2) and second is large, treat as (channels, samples)
+            if a.shape[0] in (1, 2) and a.shape[1] > a.shape[0]:
+                a = a.T  # -> (samples, channels)
         else:
-            x = x.astype(np.float32)
+            # Unexpected; drop
+            return b""
 
-        # Avoid NaNs / clamp
-        np.nan_to_num(x, copy=False)
-        np.clip(x, -1.0, 1.0, out=x)
+        # Force stereo
+        if a.shape[1] == 1 and self.channels == 2:
+            a = np.repeat(a, 2, axis=1)
+        elif a.shape[1] >= 2 and self.channels == 2:
+            a = a[:, :2]
+        elif a.shape[1] != self.channels:
+            # basic fallback: crop or pad with zeros
+            if a.shape[1] > self.channels:
+                a = a[:, :self.channels]
+            else:
+                pad = np.zeros((a.shape[0], self.channels - a.shape[1]), dtype=a.dtype)
+                a = np.concatenate([a, pad], axis=1)
 
-        # Interleaved (N,C) in C-order -> bytes are L0R0L1R1...
-        return np.ascontiguousarray(x).tobytes()
+        # Convert to int16
+        if a.dtype == np.int16:
+            s16 = a
+        else:
+            a = a.astype(np.float32, copy=False)
+            peak = float(np.max(np.abs(a))) if a.size else 0.0
 
+            # If it looks normalized, scale; otherwise assume it's already "int16-like" floats
+            if peak <= 1.5:
+                a = np.clip(a, -1.0, 1.0) * 32767.0
+            else:
+                a = np.clip(a, -32768.0, 32767.0)
+
+            s16 = a.astype(np.int16)
+
+        # Interleaved little-endian s16 frames
+        return s16.reshape(-1).tobytes(order="C")
+
+    # ---------- main thread ----------
     def run(self):
         try:
-            self._ensure_virtual_devices()
-            self._start_pwcat()
+            self._setup_virtual_mic()
+
+            # Pipe raw PCM into the null sink; apps record from remapped source.
+            # pw-cat raw stdin expects you to specify rate/channels/format. :contentReference[oaicite:6]{index=6}
+            self._pwcat = subprocess.Popen(
+                [
+                    "pw-cat",
+                    "--playback",
+                    f"--target={self.sink_name}",
+                    f"--rate={self.rate}",
+                    f"--channels={self.channels}",
+                    "--format=s16",
+                    "-",  # stdin
+                ],
+                stdin=subprocess.PIPE,
+            )
 
             while self.running_flag():
-                if self._proc is None or self._proc.poll() is not None:
-                    # Restart if pw-cat died
-                    try:
-                        self._start_pwcat()
-                    except Exception as e:
-                        print("[VirtualMic] pw-cat restart failed:", e)
-                        time.sleep(0.25)
-                        continue
-
                 try:
-                    frame = self.audio_queue.get(timeout=0.05)
+                    pcm = self.audio_queue.get(timeout=0.05)
                 except queue.Empty:
                     continue
 
-                if frame is None:
+                if self._pwcat.poll() is not None:
+                    # pw-cat died
+                    break
+
+                data = self._to_interleaved_s16_stereo(pcm)
+                if not data:
                     continue
 
                 try:
-                    payload = self._to_f32_interleaved(frame, self.channels)
-                    self._proc.stdin.write(payload)
-                except (BrokenPipeError, OSError):
-                    # pw-cat likely died; loop will restart it
-                    try:
-                        self._proc.terminate()
-                    except Exception:
-                        pass
-                    self._proc = None
+                    self._pwcat.stdin.write(data)
+                except BrokenPipeError:
+                    break
 
         finally:
-            if self._proc:
-                try:
-                    self._proc.terminate()
-                except Exception:
-                    pass
-                self._proc = None
-
-            # Optional: unload modules we created (only if we created them)
-            # If you want them to persist across runs, remove this block.
-            if self._mod_mic is not None:
-                _run(["pactl", "unload-module", str(self._mod_mic)])
-            if self._mod_sink is not None:
-                _run(["pactl", "unload-module", str(self._mod_sink)])
-
-            print("[VirtualMic] Closed")
+            try:
+                if self._pwcat and self._pwcat.stdin:
+                    self._pwcat.stdin.close()
+                if self._pwcat:
+                    self._pwcat.terminate()
+            except Exception:
+                pass
+            self._teardown_virtual_mic()

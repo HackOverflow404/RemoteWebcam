@@ -11,5 +11,6 @@
     "submitoffer",
     "updateoffer",
     "validatecode"
-  ]
+  ],
+  "cmake.sourceDirectory": "/home/hackoverflow/Documents/Projects/RemoteWebcam/linux-app"
 }
