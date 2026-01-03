@@ -65,8 +65,8 @@ export default function Home() {
 
   return (
     <section className="flex flex-col w-screen items-center">
-      <h1 className="my-10 text-5xl" aria-label="PixelStream">
-        PixelStream
+      <h1 className="my-10 text-5xl" aria-label="PixelStreamer">
+        PixelStreamer
       </h1>
       <h2 className="my-5 text-4xl" aria-label="Enter Code">
         Enter Code:

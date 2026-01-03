@@ -38,13 +38,14 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
   const dcRef = useRef<RTCDataChannel | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const processedVideoRef = useRef<ProcessedTrack | null>(null);
-  const sourceVideoTrackRef = useRef<MediaStreamTrack | null>(null);
   const outDimsRef = useRef<{ w: number; h: number } | null>(null);
+  const sourceVideoTrackRef = useRef<MediaStreamTrack | null>(null);
+  const statsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [status, setStatus] = useState<ConnectionState>("disconnected");
   const [error, setError] = useState<string | null>(null);
   const [on, setOn] = useState(false);
-  
+
   const log = (...msg: unknown[]) => console.log("[useWebRTCStream]", ...msg);
 
   const lockOutputDimsOnce = useCallback(() => {
@@ -139,6 +140,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       }
 
       cleanupProcessedVideo();
+      stopStatsLogging();
 
       setOn(false);
       setStatus("disconnected");
@@ -149,6 +151,32 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     },
     [cleanupProcessedVideo]
   );
+
+  const startStatsLogging = (pc: RTCPeerConnection) => {
+    stopStatsLogging(); // ensure only one timer
+
+    statsTimerRef.current = setInterval(async () => {
+      try {
+        const stats = await pc.getStats(); // :contentReference[oaicite:3]{index=3}
+        stats.forEach((r: any) => {
+          // outbound-rtp == sender stats :contentReference[oaicite:4]{index=4}
+          if (r.type === "outbound-rtp" && r.kind === "video") {
+            // last encoded frame dimensions :contentReference[oaicite:5]{index=5}
+            console.log("[stats] outbound video:", r.frameWidth, r.frameHeight);
+          }
+        });
+      } catch (e) {
+        // ignore transient errors when closing
+      }
+    }, 1000); // polling regularly is expected :contentReference[oaicite:6]{index=6}
+  };
+
+  const stopStatsLogging = () => {
+    if (statsTimerRef.current) {
+      clearInterval(statsTimerRef.current);
+      statsTimerRef.current = null;
+    }
+  };
 
   function getOutputDims(resolution: string) {
     // Keep output constant so WebRTC never renegotiates on rotation.
@@ -255,7 +283,10 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
         }
       });
 
+      
       await pc.setLocalDescription(await pc.createOffer());
+      
+      startStatsLogging(pc);
 
       await new Promise<void>((resolve) => {
         if (pc.iceGatheringState === "complete") return resolve();

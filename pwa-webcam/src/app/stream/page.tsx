@@ -270,7 +270,7 @@ function StreamPage() {
       <div style={stageStyle}>
         {isLoadingMedia && (
           <div className="absolute inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 pointer-events-none">
-            <div className="text-white text-2xl">Loading Media...</div>
+            <div className="text-white text-2xl" aria-label="Loading Media">Loading Media...</div>
           </div>
         )}
 
@@ -294,6 +294,7 @@ function StreamPage() {
           <div
             className="absolute top-24 left-0 right-0 flex justify-center animate-pulse z-20"
             style={{ transform: `rotate(-${rotateDeg}deg)` }}
+            aria-label={"Error Message: " + errorMessage}
           >
             <div className="bg-red-500 text-white px-4 py-2 rounded-md flex items-center">
               <span>{errorMessage}</span>
@@ -325,7 +326,7 @@ function StreamPage() {
             </button>
 
             {sessionCode && (
-              <div className="bg-black bg-opacity-50 flex items-center justify-center text-white h-10 px-3 py-1 rounded-md">
+              <div aria-label={"Session Code: " + sessionCode} className="bg-black bg-opacity-50 flex items-center justify-center text-white h-10 px-3 py-1 rounded-md">
                 Code: {sessionCode}
               </div>
             )}
@@ -339,6 +340,7 @@ function StreamPage() {
                     ? "text-gray-500"
                     : "text-red-500"
                 }`}
+                aria-label={"Connection status: " + connectionStatus}
             >
               <span className="material-symbols-outlined">
                 {icons.connection[connectionStatus]}
@@ -385,7 +387,7 @@ function StreamPage() {
                     : "text-green-500"
                   }`}
                 style={{ transform: `rotate(-${rotateDeg}deg)` }}
-                aria-label={isStreamOn ? "Stop Streaming" : "Start Streaming"}
+                aria-label={isStreamOn ? "Pause Streaming" : "Resume Streaming"}
               >
                 <span
                   className="material-symbols-outlined"

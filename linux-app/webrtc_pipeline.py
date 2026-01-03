@@ -14,11 +14,11 @@ from av import VideoFrame
 import cv2
 from enum import Enum
 import json
-from collections import deque
 from virtual_devices import VirtualCamThread, VirtualMicThread
 import numpy as np
 from av import AudioFrame
 import queue
+
 
 class ConnectionState(Enum):
     CONNECTING = "connecting"
@@ -31,24 +31,24 @@ class WebRTCWorker(QObject):
     video_frame_received = Signal(object)
     connection_state_changed = Signal(ConnectionState)
 
-    def __init__(self, code: str, widget_win_id: int):
+    def __init__(self, code: str):
         super().__init__()
         self.loop = None
         self.running = False
         self.shutting_down = False
-        
+
         self.pc = None
         self.code = code
         self.data_channels = set()
-        
+
         self.last_preview_ts = 0
         self.video_track_task = None
         self.VIRTUAL_CAM_WIDTH = 1280
         self.VIRTUAL_CAM_HEIGHT = 720
         self.virtual_cam_thread = None
         self.preview_interval = 1 / 10
-        self.frame_queue = deque(maxlen=2)
-        
+        self.video_queue = queue.Queue(maxsize=1)
+
         self.audio_track_task = None
         self.virtual_mic_thread = None
         self.audio_queue = queue.Queue(maxsize=10)
@@ -57,10 +57,7 @@ class WebRTCWorker(QObject):
         self.SUBMIT_ANSWER_URL = "https://submitanswer-qaf2yvcrrq-uc.a.run.app"
         self.GET_TURN_URL = "https://getturncredentials-qaf2yvcrrq-uc.a.run.app"
 
-    # --------------------
     # PUBLIC API
-    # --------------------
-
     def start(self):
         if self.running:
             return
@@ -73,30 +70,27 @@ class WebRTCWorker(QObject):
         self.running = False
         if self.loop and self.loop.is_running():
             self.loop.call_soon_threadsafe(
-                lambda: asyncio.create_task(self._shutdown())
+                lambda: asyncio.create_task(self.__shutdown())
             )
 
-    # --------------------
     # THREAD / LOOP SETUP
-    # --------------------
-
     def _run_async_thread(self):
-        asyncio.run(self._run())
+        asyncio.run(self.__run())
 
-    async def _shutdown(self):
+    async def __shutdown(self):
         if self.shutting_down:
             return
         self.shutting_down = True
 
         try:
-            await self.send_termination()
+            await self.__send_termination()
         except Exception:
             pass
 
         if self.video_track_task:
             self.video_track_task.cancel()
             self.video_track_task = None
-        
+
         if self.audio_track_task:
             self.audio_track_task.cancel()
             self.audio_track_task = None
@@ -117,15 +111,12 @@ class WebRTCWorker(QObject):
         self.virtual_mic_thread = None
         self.connection_state_changed.emit(ConnectionState.DISCONNECTED)
 
-    # --------------------
     # MAIN WEBRTC FLOW
-    # --------------------
-
-    async def _run(self):
+    async def __run(self):
         self.loop = asyncio.get_running_loop()
 
         print("Waiting for JS offer…")
-        offer_json = await asyncio.to_thread(self.poll_for_offer, self.code)
+        offer_json = await asyncio.to_thread(self.__poll_for_offer, self.code)
         if not self.running:
             return
 
@@ -135,7 +126,7 @@ class WebRTCWorker(QObject):
         )
         print("Got JS offer")
 
-        config = self.get_ice_configuration()
+        config = self.__get_ice_configuration()
         self.pc = RTCPeerConnection(configuration=config)
 
         self.pc.addTransceiver("video", direction="recvonly")
@@ -157,19 +148,23 @@ class WebRTCWorker(QObject):
         @self.pc.on("track")
         def on_track(track):
             if track.kind == "video":
-                self.video_track_task = asyncio.create_task(self.handle_video_track(track))
+                self.video_track_task = asyncio.create_task(
+                    self.__handle_video_track(track)
+                )
 
                 if not self.virtual_cam_thread:
                     self.virtual_cam_thread = VirtualCamThread(
-                        frame_queue=self.frame_queue,
+                        frame_queue=self.video_queue,
                         running_flag=lambda: self.running,
                         width=self.VIRTUAL_CAM_WIDTH,
                         height=self.VIRTUAL_CAM_HEIGHT,
-                        fps=20,
+                        fps=60,
                     )
                     self.virtual_cam_thread.start()
             elif track.kind == "audio":
-                self.audio_track_task = asyncio.create_task(self.handle_audio_track(track))
+                self.audio_track_task = asyncio.create_task(
+                    self.__handle_audio_track(track)
+                )
 
                 if not self.virtual_mic_thread:
                     self.virtual_mic_thread = VirtualMicThread(
@@ -194,7 +189,7 @@ class WebRTCWorker(QObject):
                     return
 
                 if data.get("type") == "terminate":
-                    await self._shutdown()
+                    await self.__shutdown()
                 if data.get("type") == "dimensions":
                     self.VIRTUAL_CAM_WIDTH = data.get("width")
                     self.VIRTUAL_CAM_HEIGHT = data.get("height")
@@ -219,12 +214,10 @@ class WebRTCWorker(QObject):
             while self.running:
                 await asyncio.sleep(1)
         finally:
-            await self._shutdown()
+            await self.__shutdown()
 
-    # --------------------
     # HELPERS
-    # --------------------
-    async def send_termination(self):
+    async def __send_termination(self):
         if not self.pc:
             return
 
@@ -232,7 +225,7 @@ class WebRTCWorker(QObject):
             if channel.readyState == "open":
                 channel.send('{"type":"terminate","source":"linux"}')
 
-    def poll_for_offer(self, code):
+    def __poll_for_offer(self, code):
         while self.running:
             r = requests.post(self.CHECK_OFFER_URL, json={"code": code})
             if r.status_code == 200 and r.json().get("offer"):
@@ -243,7 +236,7 @@ class WebRTCWorker(QObject):
                 time.sleep(0.1)
         return None
 
-    def get_ice_configuration(self):
+    def __get_ice_configuration(self):
         resp = requests.post(self.GET_TURN_URL, json={})
         raw = resp.json()
 
@@ -258,10 +251,8 @@ class WebRTCWorker(QObject):
             )
         return RTCConfiguration(iceServers=servers)
 
-    # --------------------
-    # TRACK HANDLER (FIXED)
-    # --------------------
-    async def handle_video_track(self, track: MediaStreamTrack):
+    # TRACK HANDLER
+    async def __handle_video_track(self, track: MediaStreamTrack):
         try:
             while self.running:
                 frame = await track.recv()
@@ -270,22 +261,32 @@ class WebRTCWorker(QObject):
                     continue
 
                 img = frame.to_ndarray(format="bgr24")
+                print("incoming", img.shape)
 
                 # Non-blocking enqueue (always same shape now)
-                self.frame_queue.append(img)
+                self.video_queue.put_nowait(img)
 
                 # Preview throttle
                 now = time.monotonic()
                 if now - self.last_preview_ts >= self.preview_interval:
                     self.last_preview_ts = now
                     self.video_frame_received.emit(img)
-
+        except queue.Full:
+            # drop the oldest frame, keep the newest
+            try:
+                _ = self.video_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self.video_queue.put_nowait(img)
+            except queue.Full:
+                pass
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            print("Track recv error:", e)
-    
-    async def handle_audio_track(self, track: MediaStreamTrack):
+            print("Track recv error:", repr(e))
+
+    async def __handle_audio_track(self, track: MediaStreamTrack):
         try:
             while self.running:
                 frame = await track.recv()
@@ -293,24 +294,18 @@ class WebRTCWorker(QObject):
                 if not isinstance(frame, AudioFrame):
                     continue
 
-                pcm = frame.to_ndarray()
-
-                # Shape normalization:
-                # aiortc gives (channels, samples)
-                if pcm.ndim == 2:
-                    pcm = pcm.T  # → (samples, channels)
-
-                # Convert int16 → float32 if needed
-                if pcm.dtype == np.int16:
-                    pcm = pcm.astype(np.float32) / 32768.0
-
-                # Enqueue non-blocking
-                try:
-                    self.audio_queue.put_nowait(pcm)
-                except queue.Full:
-                    pass
-
+                pcm = frame.to_ndarray().astype(np.float32)
+                self.audio_queue.put_nowait(pcm)
+        except queue.Full:
+            try:
+                _ = self.audio_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self.audio_queue.put_nowait(pcm)
+            except queue.Full:
+                pass
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            print("Audio track error:", e)
+            print("Audio track error:", repr(e))
