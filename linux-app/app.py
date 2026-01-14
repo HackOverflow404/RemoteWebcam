@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import requests
 from PySide6.QtWidgets import (
     QApplication,
@@ -23,6 +22,11 @@ import cv2
 class PixelStreamerApp(QMainWindow):
     def __init__(self):
         super().__init__()
+        self._latest_frame = None
+        self._frame_timer = QTimer(self)
+        self._frame_timer.timeout.connect(self.render_latest_frame)
+        self._frame_timer.start(33) 
+        
         self.code = None
         self.worker = None
         self.poll_timer = None
@@ -147,7 +151,7 @@ class PixelStreamerApp(QMainWindow):
         button.setEnabled(True)
         if self.code != "Error":
             self.worker = WebRTCWorker(code=self.code)
-            self.worker.connection_state_changed.connect(self.update_connection_status)
+            self.worker.connection_state_changed.connect(self.on_connection_status)
             self.worker.video_frame_received.connect(self.on_frame)
             self.worker.start()
 
@@ -160,7 +164,8 @@ class PixelStreamerApp(QMainWindow):
             print(f"Failed to generate code: {e}")
             return "Error"
 
-    def update_connection_status(self, state):
+    @Slot(object)
+    def on_connection_status(self, state):
         color_map = {
             ConnectionState.CONNECTED: "#2ECC71",
             ConnectionState.CONNECTING: "#F39C12",
@@ -178,6 +183,15 @@ class PixelStreamerApp(QMainWindow):
     def on_frame(self, frame: np.ndarray):
         if frame is None:
             return
+        self._latest_frame = frame
+
+    def render_latest_frame(self):
+        frame = self._latest_frame
+        if frame is None:
+            return
+
+        # Optional: clear so we don't re-render the same frame
+        self._latest_frame = None
 
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         rgb = np.ascontiguousarray(rgb)
@@ -185,43 +199,50 @@ class PixelStreamerApp(QMainWindow):
         h, w, ch = rgb.shape
         bytes_per_line = ch * w
 
-        image = QImage(
-            rgb.data,
-            w,
-            h,
-            bytes_per_line,
-            QImage.Format_RGB888,
-        ).copy()  # ✅ detach from numpy memory
-
+        image = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
         self.video_label.setPixmap(QPixmap.fromImage(image))
 
-    def reset_session_ui(self):
-        if not self.worker:
+
+    def stop_worker(self):
+        """Stop and fully tear down the current worker, if any."""
+        w = self.worker
+        if not w:
             return
 
-        self.worker.stop()
+        try:
+            w.video_frame_received.disconnect(self.on_frame)
+        except Exception:
+            pass
+
+        try:
+            w.stop()
+        except Exception as e:
+            print("worker.stop() failed:", e)
+
         self.worker = None
 
-        # Delete backend code
+    def reset_session_ui(self):
+        if not self.worker and not self.code:
+            return
+
+        self.stop_worker()
         self.delete_code()
 
-        # Reset code button
         btn = self.button_widgets.get("Generate Code")
         if btn:
             btn.setText("Generate Code")
             btn.setEnabled(True)
 
-        # Clear preview
         self.video_label.clear()
-
         self.code = None
 
     def handle_code_deletion(self, button):
-        self.delete_code()
         if self.poll_timer:
             self.poll_timer.stop()
-        if self.worker:
-            self.worker.stop()
+
+        self.stop_worker()
+        self.delete_code()
+
         button.setText(self.buttons[0])
         button.setEnabled(True)
 
@@ -238,8 +259,6 @@ class PixelStreamerApp(QMainWindow):
             print(f"Failed to delete code: {e}")
 
     def closeEvent(self, event):
-        if self.worker:
-            self.worker.stop()
-            self.worker = None
+        self.stop_worker()
         self.delete_code()
         event.accept()
