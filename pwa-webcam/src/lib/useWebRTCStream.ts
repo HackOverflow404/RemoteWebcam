@@ -22,6 +22,8 @@ export interface UseWebRTCStreamProps {
   resolution: string;
   fps: number;
   exposure: number;
+  toggleMic: () => void;
+  toggleVid: () => void;
   startMedia: () => void;
   stopMedia: () => void;
   handleRemoteTermination: (remoteTermination: boolean) => void;
@@ -255,6 +257,21 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
         try {
           const msg = JSON.parse(e.data);
 
+          if (msg.type === "toggle_mic" && msg.source === "linux") {
+            console.log("Linux toggled mic");
+            // TODO: toggle mic
+            if (propsRef.current.isMicOn == msg.value) {
+              propsRef.current.toggleMic();
+            }
+          }
+          
+          if (msg.type === "toggle_cam" && msg.source === "linux") {
+            console.log("Linux toggled cam");
+            if (propsRef.current.isVidOn == msg.value) {
+              propsRef.current.toggleVid();
+            }
+          }
+          
           if (msg.type === "terminate" && msg.source === "linux") {
             console.log("Linux terminated session");
             cleanup("remote-linux-termination");
