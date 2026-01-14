@@ -257,6 +257,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
         try {
           const msg = JSON.parse(e.data);
           console.log("Message received: ", msg);
+          console.log("[dc] msg at", performance.now());
 
           if (msg.type === "toggle_mic" && msg.source === "linux") {
             if (propsRef.current.isMicOn !== msg.value.toLowerCase()) {
