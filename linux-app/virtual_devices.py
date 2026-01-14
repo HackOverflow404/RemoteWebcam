@@ -167,8 +167,8 @@ class VirtualMicThread(threading.Thread):
         if a.ndim == 1:
             a = a[:, None]
         elif a.ndim == 2:
-            if a.shape[0] == 1:
-                print("[VirtualMic] first 8 samples:", a[0, :8])
+            # if a.shape[0] == 1:
+            #     print("[VirtualMic] samples:", a[0, :8])
             # Handle (1, N) where N might be interleaved stereo flattened
             if a.shape[0] == 1 and self.channels == 2 and (a.shape[1] % 2 == 0):
                 a = a.reshape(-1, 2)
