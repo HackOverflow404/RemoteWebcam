@@ -259,15 +259,15 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
           console.log("Message received: ", msg);
 
           if (msg.type === "toggle_mic" && msg.source === "linux") {
-            console.log("Linux toggled mic");
-            if (propsRef.current.isMicOn == msg.value) {
+            if (propsRef.current.isMicOn !== msg.value.toLowerCase()) {
+              console.log("Linux toggled mic");
               propsRef.current.toggleMic();
             }
           }
           
           if (msg.type === "toggle_cam" && msg.source === "linux") {
-            console.log("Linux toggled cam");
-            if (propsRef.current.isVidOn == msg.value) {
+            if (propsRef.current.isVidOn !== msg.value.toLowerCase()) {
+              console.log("Linux toggled cam");
               propsRef.current.toggleVid();
             }
           }
