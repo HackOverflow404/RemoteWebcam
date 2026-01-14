@@ -29,7 +29,6 @@ class PixelStreamerApp(QMainWindow):
         
         self.code = None
         self.worker = None
-        self.poll_timer = None
         self.initUI()
 
     def initUI(self):
@@ -61,11 +60,13 @@ class PixelStreamerApp(QMainWindow):
         self.buttons = ["Generate Code", "Hide Into Tray", "Webcam", "Microphone"]
         self.button_widgets = {}
 
-        for label in self.buttons:
+        for i, label in enumerate(self.buttons):
             button = QPushButton(label)
             button.setFont(self.font)
             button.setCursor(Qt.PointingHandCursor)
             button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            if i > 1:
+                button.setCheckable(True)
             button.clicked.connect(lambda checked, b=button: self.on_button_click(b))
             sidebar_layout.addWidget(button)
             self.button_widgets[label] = button
@@ -111,24 +112,128 @@ class PixelStreamerApp(QMainWindow):
         main_layout.addWidget(sidebar)
         main_layout.addLayout(preview_container)
 
+    def on_tray_activated(self, reason):
+        if reason == QSystemTrayIcon.Trigger:  # left click
+            self.show_main_window()
+    
     def create_tray_icon(self):
         self.tray_icon = QSystemTrayIcon(self)
         self.tray_icon.setIcon(QIcon("./assets/icon.png"))
 
         tray_menu = QMenu()
-        tray_menu.addAction("Generate Code", self.show_main_window)
-        tray_menu.addAction("Toggle Camera", self.show_main_window)
-        tray_menu.addAction("Toggle Microphone", self.show_main_window)
+
+        # --- Code action (dynamic: "Generate Code" <-> actual code) ---
+        self.tray_action_code = tray_menu.addAction("Generate Code")
+        self.tray_action_code.triggered.connect(self.on_tray_code_action)
+
+        tray_menu.addSeparator()
+
+        # --- Toggle Camera / Mic (checkable) ---
+        self.tray_action_cam = tray_menu.addAction("Webcam")
+        self.tray_action_cam.setCheckable(True)
+        self.tray_action_cam.setChecked(True)  # default "on"
+        self.tray_action_cam.toggled.connect(self.on_tray_toggle_cam)
+
+        self.tray_action_mic = tray_menu.addAction("Microphone")
+        self.tray_action_mic.setCheckable(True)
+        self.tray_action_mic.setChecked(True)  # default "on"
+        self.tray_action_mic.toggled.connect(self.on_tray_toggle_mic)
+
+        tray_menu.addSeparator()
+
+        # --- Show / Quit ---
         tray_menu.addAction("Show", self.show_main_window)
-        tray_menu.addAction("Quit", QApplication.quit)
+        tray_menu.addAction("Quit", self.handle_quit)
 
         self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.activated.connect(self.on_tray_activated)  # optional UX
         self.tray_icon.show()
+
 
     def show_main_window(self):
         self.show()
         self.raise_()
         self.activateWindow()
+    
+    def sync_tray_state(self):
+        # Code action text
+        if hasattr(self, "tray_action_code"):
+            if self.code and self.code != "Error":
+                self.tray_action_code.setText(self.code)
+            else:
+                self.tray_action_code.setText("Generate Code")
+
+        # Sync toggle states from sidebar buttons
+        cam_btn = self.button_widgets.get("Webcam")
+        mic_btn = self.button_widgets.get("Microphone")
+
+        if hasattr(self, "tray_action_cam") and cam_btn and cam_btn.isCheckable():
+            self.tray_action_cam.blockSignals(True)
+            self.tray_action_cam.setChecked(cam_btn.isChecked())
+            self.tray_action_cam.blockSignals(False)
+
+        if hasattr(self, "tray_action_mic") and mic_btn and mic_btn.isCheckable():
+            self.tray_action_mic.blockSignals(True)
+            self.tray_action_mic.setChecked(mic_btn.isChecked())
+            self.tray_action_mic.blockSignals(False)
+
+    
+    def on_tray_code_action(self):
+        """
+        If no code: generate.
+        If code exists: delete + reset.
+        """
+        # Prefer to reuse the existing button logic so behavior stays consistent.
+        btn = self.button_widgets.get("Generate Code")
+
+        if self.code is None:
+            # Generate
+            if btn:
+                self.on_button_click(btn)
+            else:
+                # Fallback if you ever remove the button
+                QTimer.singleShot(0, lambda: self.handle_code_generation(btn))
+        else:
+            # Delete
+            if btn:
+                # Ensure the same UI flow as clicking the button with code text
+                btn.setText(self.code)
+                self.on_button_click(btn)
+            else:
+                QTimer.singleShot(0, lambda: self.handle_code_deletion(btn))
+
+
+    def on_tray_toggle_cam(self, checked: bool):
+        # Sync sidebar button state
+        btn = self.button_widgets.get("Webcam")
+        if btn and btn.isCheckable() and btn.isChecked() != checked:
+            btn.blockSignals(True)
+            btn.setChecked(checked)
+            btn.blockSignals(False)
+
+        # Call worker if available
+        if self.worker:
+            try:
+                self.worker.toggle_cam(checked)
+            except Exception as e:
+                print("toggle_cam failed:", e)
+
+
+    def on_tray_toggle_mic(self, checked: bool):
+        # Sync sidebar button state
+        btn = self.button_widgets.get("Microphone")
+        if btn and btn.isCheckable() and btn.isChecked() != checked:
+            btn.blockSignals(True)
+            btn.setChecked(checked)
+            btn.blockSignals(False)
+
+        # Call worker if available
+        if self.worker:
+            try:
+                self.worker.toggle_mic(checked)
+            except Exception as e:
+                print("toggle_mic failed:", e)
+
 
     def on_button_click(self, button):
         if button.text() == self.buttons[0] or button.text() == "Error":
@@ -142,13 +247,52 @@ class PixelStreamerApp(QMainWindow):
             QTimer.singleShot(100, lambda: self.handle_code_deletion(button))
             return
         if button.text() == self.buttons[1]:
+            self.sync_tray_state()
             self.hide()
+
+            # optional toast
+            if self.code and self.code != "Error":
+                self.tray_icon.showMessage(
+                    "PixelStreamer",
+                    f"Running in tray. Code: {self.code}",
+                    QSystemTrayIcon.Information,
+                    2000,
+                )
+            else:
+                self.tray_icon.showMessage(
+                    "PixelStreamer",
+                    "Running in tray.",
+                    QSystemTrayIcon.Information,
+                    1500,
+                )
+            return
+        if button.text() == self.buttons[2]:
+            checked = button.isChecked()
+            if hasattr(self, "tray_action_cam") and self.tray_action_cam.isChecked() != checked:
+                self.tray_action_cam.blockSignals(True)
+                self.tray_action_cam.setChecked(checked)
+                self.tray_action_cam.blockSignals(False)
+            if self.worker:
+                self.worker.toggle_cam(checked)
+            return
+        if button.text() == self.buttons[3]:
+            checked = button.isChecked()
+            if hasattr(self, "tray_action_mic") and self.tray_action_mic.isChecked() != checked:
+                self.tray_action_mic.blockSignals(True)
+                self.tray_action_mic.setChecked(checked)
+                self.tray_action_mic.blockSignals(False)
+            if self.worker:
+                self.worker.toggle_mic(checked)
             return
 
     def handle_code_generation(self, button):
         self.code = self.request_code()
         button.setText(self.code)
         button.setEnabled(True)
+        
+        if hasattr(self, "tray_action_code"):
+            self.tray_action_code.setText(self.code if self.code != "Error" else "Generate Code")
+        
         if self.code != "Error":
             self.worker = WebRTCWorker(code=self.code)
             self.worker.connection_state_changed.connect(self.on_connection_status)
@@ -157,7 +301,10 @@ class PixelStreamerApp(QMainWindow):
 
     def request_code(self):
         try:
-            response = requests.post("https://generatecode-qaf2yvcrrq-uc.a.run.app")
+            response = requests.post(
+                "https://generatecode-qaf2yvcrrq-uc.a.run.app",
+                timeout=5
+            )
             response.raise_for_status()
             return response.json()["code"]
         except Exception as e:
@@ -215,7 +362,7 @@ class PixelStreamerApp(QMainWindow):
             pass
 
         try:
-            w.stop()
+            QTimer.singleShot(0, w.stop)
         except Exception as e:
             print("worker.stop() failed:", e)
 
@@ -233,15 +380,18 @@ class PixelStreamerApp(QMainWindow):
             btn.setText("Generate Code")
             btn.setEnabled(True)
 
+        if hasattr(self, "tray_action_code"):
+            self.tray_action_code.setText("Generate Code")
+
         self.video_label.clear()
         self.code = None
 
     def handle_code_deletion(self, button):
-        if self.poll_timer:
-            self.poll_timer.stop()
-
         self.stop_worker()
         self.delete_code()
+        
+        if hasattr(self, "tray_action_code"):
+            self.tray_action_code.setText("Generate Code")
 
         button.setText(self.buttons[0])
         button.setEnabled(True)
@@ -252,12 +402,18 @@ class PixelStreamerApp(QMainWindow):
                 return
 
             requests.post(
-                "https://deletecode-qaf2yvcrrq-uc.a.run.app", json={"code": self.code}
+                "https://deletecode-qaf2yvcrrq-uc.a.run.app", json={"code": self.code},
+                timeout=5
             )
             self.code = None
         except Exception as e:
             print(f"Failed to delete code: {e}")
 
+    def handle_quit(self):
+        self.stop_worker()
+        self.delete_code()
+        QApplication.quit()
+    
     def closeEvent(self, event):
         self.stop_worker()
         self.delete_code()
