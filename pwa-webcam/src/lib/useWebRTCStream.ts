@@ -256,10 +256,10 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       dc.onmessage = (e) => {
         try {
           const msg = JSON.parse(e.data);
+          console.log("Message received: ", msg);
 
           if (msg.type === "toggle_mic" && msg.source === "linux") {
             console.log("Linux toggled mic");
-            // TODO: toggle mic
             if (propsRef.current.isMicOn == msg.value) {
               propsRef.current.toggleMic();
             }
