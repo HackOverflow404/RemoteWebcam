@@ -107,6 +107,8 @@ function StreamPage() {
     resolution,
     fps: Number(fps),
     exposure,
+    toggleMic,
+    toggleVid,
     startMedia,
     stopMedia,
     handleRemoteTermination,
