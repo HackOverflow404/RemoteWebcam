@@ -155,20 +155,22 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
   );
 
   const startStatsLogging = (pc: RTCPeerConnection) => {
-    stopStatsLogging();
+    stopStatsLogging(); // ensure only one timer
 
     statsTimerRef.current = setInterval(async () => {
       try {
-        const stats = await pc.getStats();
+        const stats = await pc.getStats(); // :contentReference[oaicite:3]{index=3}
         stats.forEach((r: any) => {
+          // outbound-rtp == sender stats :contentReference[oaicite:4]{index=4}
           if (r.type === "outbound-rtp" && r.kind === "video") {
+            // last encoded frame dimensions :contentReference[oaicite:5]{index=5}
             console.log("[stats] outbound video:", r.frameWidth, r.frameHeight);
           }
         });
       } catch (e) {
         // ignore transient errors when closing
       }
-    }, 1000);
+    }, 1000); // polling regularly is expected :contentReference[oaicite:6]{index=6}
   };
 
   const stopStatsLogging = () => {
@@ -179,6 +181,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
   };
 
   function getOutputDims(resolution: string) {
+    // Keep output constant so WebRTC never renegotiates on rotation.
     switch (resolution) {
       case "4k":
         return { w: 3840, h: 2160 };
@@ -187,7 +190,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       case "sd":
         return { w: 640, h: 480 };
     }
-    return { w: 1280, h: 720 };
+    return { w: 1280, h: 720 }; // hd default
   }
 
   async function fetchIceServers() {
@@ -244,80 +247,41 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       };
 
       const dc = pc.createDataChannel("chat");
-      dcRef.current = dc;
-
-      // Set up all event handlers BEFORE the channel opens
       dc.onopen = () => {
-        log("DataChannel opened, readyState:", dc.readyState);
-        
-        // CRITICAL: Wait before sending to ensure Linux has set up its message handler
-        // The ondatachannel event on Linux side fires when negotiation completes,
-        // but the @channel.on("message") decorator needs time to register
-        setTimeout(() => {
-          if (dc.readyState === "open") {
-            log("Sending initial messages after delay");
-            dc.send("Hello from JS!");
-            const { resolution } = propsRef.current;
-            const { w, h } = getOutputDims(resolution);
-            dc.send(JSON.stringify({ type: "dimensions", width: w, height: h }));
-          }
-        }, 200); // Increased delay to ensure Linux is ready
+        dc.send("Hello from JS!");
+        const { resolution } = propsRef.current;
+        const { w, h } = getOutputDims(resolution);
+        dc.send(JSON.stringify({ type: "dimensions", width: w, height: h }));
       };
-
-      dc.onclose = () => {
-        log("DataChannel closed");
-      };
-
-      dc.onerror = (e) => {
-        log("DataChannel error:", e);
-      };
-
       dc.onmessage = (e) => {
-        log("DataChannel message received at", performance.now(), "readyState:", dc.readyState);
-        
         try {
           const msg = JSON.parse(e.data);
-          log("Parsed message:", msg);
+          console.log("Message received: ", msg);
+          console.log("[dc] msg at", performance.now());
 
           if (msg.type === "toggle_mic" && msg.source === "linux") {
-            const targetState = msg.value.toLowerCase();
-            log(`Mic toggle received: target=${targetState}`);
-            
-            // Call immediately - the propsRef should be current
-            const currentMicState = propsRef.current.isMicOn;
-            log(`Current mic state: ${currentMicState}`);
-            
-            if (currentMicState !== targetState) {
-              log("Calling toggleMic()");
+            if (propsRef.current.isMicOn !== msg.value.toLowerCase()) {
+              console.log("Linux toggled mic");
               propsRef.current.toggleMic();
-            } else {
-              log("Mic already in target state, skipping toggle");
             }
           }
           
           if (msg.type === "toggle_cam" && msg.source === "linux") {
-            const targetState = msg.value.toLowerCase();
-            log(`Cam toggle received: target=${targetState}`);
-            
-            const currentCamState = propsRef.current.isVidOn;
-            log(`Current cam state: ${currentCamState}`);
-            
-            if (currentCamState !== targetState) {
-              log("Calling toggleVid()");
+            if (propsRef.current.isVidOn !== msg.value.toLowerCase()) {
+              console.log("Linux toggled cam");
               propsRef.current.toggleVid();
-            } else {
-              log("Cam already in target state, skipping toggle");
             }
           }
           
           if (msg.type === "terminate" && msg.source === "linux") {
-            log("Received termination from Linux");
+            console.log("Linux terminated session");
             cleanup("remote-linux-termination");
           }
-        } catch (err) {
-          log("Non-JSON DataChannel message:", e.data);
+        } catch {
+          console.log("DataChannel message:", e.data);
         }
       };
+      dcRef.current = dc;
 
       media.getTracks().forEach((track) => {
         if (track.kind === "video") {
@@ -337,6 +301,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
         }
       });
 
+      
       await pc.setLocalDescription(await pc.createOffer());
       
       startStatsLogging(pc);
