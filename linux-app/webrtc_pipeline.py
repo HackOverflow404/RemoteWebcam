@@ -97,17 +97,19 @@ class WebRTCWorker(QObject):
         self._thread = None
     
     def toggle_cam(self, isChecked: bool):
-        desired = "off" if isChecked else "on"   # or invert if your UI means “muted”
+        desired = "off" if isChecked else "on"
         msg = json.dumps({"type": "toggle_cam", "value": desired, "source": "linux"})
 
         if not self.data_channels:
             print("[WebRTC] Data channels unavailable")
             return
 
-        for ch in list(self.data_channels):
-            if ch.readyState == "open":
-                print("[WebRTC] Sending toggle cam:", msg)
-                ch.send(msg)
+        # Schedule on the asyncio loop, don't call send() directly from Qt thread
+        if self.loop and self.loop.is_running():
+            for ch in list(self.data_channels):
+                if ch.readyState == "open":
+                    print("[WebRTC] Scheduling toggle cam send:", msg)
+                    asyncio.run_coroutine_threadsafe(self._send_message(ch, msg), self.loop)
 
     def toggle_mic(self, isChecked: bool):
         desired = "off" if isChecked else "on"
@@ -117,10 +119,20 @@ class WebRTCWorker(QObject):
             print("[WebRTC] Data channels unavailable")
             return
 
-        for ch in list(self.data_channels):
-            if ch.readyState == "open":
-                print("[WebRTC] Sending toggle mic:", msg)
-                ch.send(msg)
+        if self.loop and self.loop.is_running():
+            for ch in list(self.data_channels):
+                if ch.readyState == "open":
+                    print("[WebRTC] Scheduling toggle mic send:", msg)
+                    asyncio.run_coroutine_threadsafe(self._send_message(ch, msg), self.loop)
+
+    async def _send_message(self, channel, msg: str):
+        """Helper to send messages from the correct thread"""
+        try:
+            if channel.readyState == "open":
+                channel.send(msg)
+                print(f"[WebRTC] Message sent: {msg}")
+        except Exception as e:
+            print(f"[WebRTC] Send failed: {e}")
 
     # THREAD / LOOP SETUP
     def _run_async_thread(self):
@@ -296,6 +308,7 @@ class WebRTCWorker(QObject):
 
             @channel.on("message")
             async def on_message(msg):
+                print(msg)
                 try:
                     data = msg if isinstance(msg, dict) else json.loads(msg)
                 except Exception:
