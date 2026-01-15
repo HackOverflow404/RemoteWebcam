@@ -246,13 +246,22 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       const dc = pc.createDataChannel("chat");
       dcRef.current = dc;
 
-      // Set up all event handlers BEFORE opening
+      // Set up all event handlers BEFORE the channel opens
       dc.onopen = () => {
         log("DataChannel opened, readyState:", dc.readyState);
-        dc.send("Hello from JS!");
-        const { resolution } = propsRef.current;
-        const { w, h } = getOutputDims(resolution);
-        dc.send(JSON.stringify({ type: "dimensions", width: w, height: h }));
+        
+        // CRITICAL: Wait before sending to ensure Linux has set up its message handler
+        // The ondatachannel event on Linux side fires when negotiation completes,
+        // but the @channel.on("message") decorator needs time to register
+        setTimeout(() => {
+          if (dc.readyState === "open") {
+            log("Sending initial messages after delay");
+            dc.send("Hello from JS!");
+            const { resolution } = propsRef.current;
+            const { w, h } = getOutputDims(resolution);
+            dc.send(JSON.stringify({ type: "dimensions", width: w, height: h }));
+          }
+        }, 200); // Increased delay to ensure Linux is ready
       };
 
       dc.onclose = () => {
@@ -264,31 +273,40 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       };
 
       dc.onmessage = (e) => {
-        log("DataChannel message received, readyState:", dc.readyState);
+        log("DataChannel message received at", performance.now(), "readyState:", dc.readyState);
         
         try {
           const msg = JSON.parse(e.data);
           log("Parsed message:", msg);
 
           if (msg.type === "toggle_mic" && msg.source === "linux") {
-            const currentMicState = propsRef.current.isMicOn;
             const targetState = msg.value.toLowerCase();
-            log(`Mic toggle: current=${currentMicState}, target=${targetState}`);
+            log(`Mic toggle received: target=${targetState}`);
+            
+            // Call immediately - the propsRef should be current
+            const currentMicState = propsRef.current.isMicOn;
+            log(`Current mic state: ${currentMicState}`);
             
             if (currentMicState !== targetState) {
-              log("Toggling mic from Linux command");
+              log("Calling toggleMic()");
               propsRef.current.toggleMic();
+            } else {
+              log("Mic already in target state, skipping toggle");
             }
           }
           
           if (msg.type === "toggle_cam" && msg.source === "linux") {
-            const currentCamState = propsRef.current.isVidOn;
             const targetState = msg.value.toLowerCase();
-            log(`Cam toggle: current=${currentCamState}, target=${targetState}`);
+            log(`Cam toggle received: target=${targetState}`);
+            
+            const currentCamState = propsRef.current.isVidOn;
+            log(`Current cam state: ${currentCamState}`);
             
             if (currentCamState !== targetState) {
-              log("Toggling cam from Linux command");
+              log("Calling toggleVid()");
               propsRef.current.toggleVid();
+            } else {
+              log("Cam already in target state, skipping toggle");
             }
           }
           
