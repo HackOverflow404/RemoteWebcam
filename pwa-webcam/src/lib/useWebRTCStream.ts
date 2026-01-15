@@ -155,22 +155,20 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
   );
 
   const startStatsLogging = (pc: RTCPeerConnection) => {
-    stopStatsLogging(); // ensure only one timer
+    stopStatsLogging();
 
     statsTimerRef.current = setInterval(async () => {
       try {
-        const stats = await pc.getStats(); // :contentReference[oaicite:3]{index=3}
+        const stats = await pc.getStats();
         stats.forEach((r: any) => {
-          // outbound-rtp == sender stats :contentReference[oaicite:4]{index=4}
           if (r.type === "outbound-rtp" && r.kind === "video") {
-            // last encoded frame dimensions :contentReference[oaicite:5]{index=5}
             console.log("[stats] outbound video:", r.frameWidth, r.frameHeight);
           }
         });
       } catch (e) {
         // ignore transient errors when closing
       }
-    }, 1000); // polling regularly is expected :contentReference[oaicite:6]{index=6}
+    }, 1000);
   };
 
   const stopStatsLogging = () => {
@@ -181,7 +179,6 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
   };
 
   function getOutputDims(resolution: string) {
-    // Keep output constant so WebRTC never renegotiates on rotation.
     switch (resolution) {
       case "4k":
         return { w: 3840, h: 2160 };
@@ -190,7 +187,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       case "sd":
         return { w: 640, h: 480 };
     }
-    return { w: 1280, h: 720 }; // hd default
+    return { w: 1280, h: 720 };
   }
 
   async function fetchIceServers() {
@@ -247,41 +244,62 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       };
 
       const dc = pc.createDataChannel("chat");
+      dcRef.current = dc;
+
+      // Set up all event handlers BEFORE opening
       dc.onopen = () => {
+        log("DataChannel opened, readyState:", dc.readyState);
         dc.send("Hello from JS!");
         const { resolution } = propsRef.current;
         const { w, h } = getOutputDims(resolution);
         dc.send(JSON.stringify({ type: "dimensions", width: w, height: h }));
       };
+
+      dc.onclose = () => {
+        log("DataChannel closed");
+      };
+
+      dc.onerror = (e) => {
+        log("DataChannel error:", e);
+      };
+
       dc.onmessage = (e) => {
+        log("DataChannel message received, readyState:", dc.readyState);
+        
         try {
           const msg = JSON.parse(e.data);
-          console.log("Message received: ", msg);
-          console.log("[dc] msg at", performance.now());
+          log("Parsed message:", msg);
 
           if (msg.type === "toggle_mic" && msg.source === "linux") {
-            if (propsRef.current.isMicOn !== msg.value.toLowerCase()) {
-              console.log("Linux toggled mic");
+            const currentMicState = propsRef.current.isMicOn;
+            const targetState = msg.value.toLowerCase();
+            log(`Mic toggle: current=${currentMicState}, target=${targetState}`);
+            
+            if (currentMicState !== targetState) {
+              log("Toggling mic from Linux command");
               propsRef.current.toggleMic();
             }
           }
           
           if (msg.type === "toggle_cam" && msg.source === "linux") {
-            if (propsRef.current.isVidOn !== msg.value.toLowerCase()) {
-              console.log("Linux toggled cam");
+            const currentCamState = propsRef.current.isVidOn;
+            const targetState = msg.value.toLowerCase();
+            log(`Cam toggle: current=${currentCamState}, target=${targetState}`);
+            
+            if (currentCamState !== targetState) {
+              log("Toggling cam from Linux command");
               propsRef.current.toggleVid();
             }
           }
           
           if (msg.type === "terminate" && msg.source === "linux") {
-            console.log("Linux terminated session");
+            log("Received termination from Linux");
             cleanup("remote-linux-termination");
           }
-        } catch {
-          console.log("DataChannel message:", e.data);
+        } catch (err) {
+          log("Non-JSON DataChannel message:", e.data);
         }
       };
-      dcRef.current = dc;
 
       media.getTracks().forEach((track) => {
         if (track.kind === "video") {
@@ -301,7 +319,6 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
         }
       });
 
-      
       await pc.setLocalDescription(await pc.createOffer());
       
       startStatsLogging(pc);
