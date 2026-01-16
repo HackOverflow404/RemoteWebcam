@@ -135,8 +135,17 @@ export default function useMediaStream({
   }, [getConstraints, isFrontCamera, isMicOn]);
 
   const toggleMedia = useCallback(() => {
-    toggleMic();
-    toggleVid()
+    if (isMicOn == "off" && isVidOn == "off") {
+      toggleMic();
+      toggleVid();
+      return;
+    }
+    if (isMicOn == "on") {
+      toggleMic();
+    }
+    if (isVidOn == "on") {
+      toggleVid()
+    }
   }, [toggleMic, toggleVid]);
 
   // --- Stop everything (always uses ref) ---
