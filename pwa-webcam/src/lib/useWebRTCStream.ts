@@ -354,11 +354,15 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
 
       await pc.setRemoteDescription(answer);
       
-      wakeLock.current = await navigator.wakeLock.request('screen');
-      wakeLock.current.addEventListener('release', () => {
-        console.log('Wake Lock was released');
-      });
+      try {
+        wakeLock.current = await navigator.wakeLock.request('screen');
+        wakeLock.current.addEventListener('release', () => {
+          console.log('Wake Lock was released');
+        });
       console.log('Wake Lock is active');
+      } catch (error) {
+        log("startStream() wakeLock failed");
+      }
       log("WebRTC fully established");
     } catch (e: any) {
       console.error("WebRTC error:", e);
