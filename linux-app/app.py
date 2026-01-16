@@ -133,12 +133,10 @@ class PixelStreamerApp(QMainWindow):
         # --- Toggle Camera / Mic (checkable) ---
         self.tray_action_cam = tray_menu.addAction("Webcam")
         self.tray_action_cam.setCheckable(True)
-        self.tray_action_cam.setChecked(True)  # default "on"
         self.tray_action_cam.toggled.connect(self.on_tray_toggle_cam)
 
         self.tray_action_mic = tray_menu.addAction("Microphone")
         self.tray_action_mic.setCheckable(True)
-        self.tray_action_mic.setChecked(True)  # default "on"
         self.tray_action_mic.toggled.connect(self.on_tray_toggle_mic)
 
         tray_menu.addSeparator()
@@ -385,6 +383,8 @@ class PixelStreamerApp(QMainWindow):
             btn.setText("Generate Code")
             btn.setEnabled(True)
         
+        self.button_widgets.get("Microphone").setChecked(True)
+        self.button_widgets.get("Webcam").setChecked(True)
         self.button_widgets.get("Microphone").setEnabled(False)
         self.button_widgets.get("Webcam").setEnabled(False)
 
