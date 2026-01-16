@@ -19,13 +19,18 @@ QPushButton:hover {
     background-color: #1d4ed8;
 }
 
-QPushButton:checked {
+QPushButton:disabled {
+    background-color: #777;
+}
+
+QPushButton[checkable="true"]:!checked {
     background-color: white;
     color: #3b82f6;
 }
 
-QPushButton:disabled {
-    background-color: #777;
+QPushButton[checkable="true"]:checked {
+    background-color: #3b82f6;
+    color: white;
 }
 
 /* Labels */
