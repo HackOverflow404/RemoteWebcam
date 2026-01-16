@@ -311,6 +311,17 @@ class PixelStreamerApp(QMainWindow):
             return "Error"
 
     @Slot(object)
+    def on_mic_status(self, state):
+        self.button_widgets.get("Microphone").setChecked(True if state == "on" else False)
+        self.sync_tray_state()
+        
+    
+    @Slot(object)
+    def on_vid_status(self, state):
+        self.button_widgets.get("Webcam").setChecked(True if state == "on" else False)
+        self.sync_tray_state()
+    
+    @Slot(object)
     def on_connection_status(self, state):
         color_map = {
             ConnectionState.CONNECTED: "#2ECC71",

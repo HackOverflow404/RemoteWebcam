@@ -25,10 +25,16 @@ class ConnectionState(Enum):
     DISCONNECTED = "disconnected"
     FAILED = "failed"
 
+class DeviceState(Enum):
+    ON = "on"
+    OFF = "off"
+
 
 class WebRTCWorker(QObject):
     video_frame_received = Signal(object)
     connection_state_changed = Signal(ConnectionState)
+    mic_status_changed = Signal(DeviceState)
+    vid_status_changed = Signal(DeviceState)
 
     def __init__(self, code: str):
         super().__init__()
@@ -314,6 +320,8 @@ class WebRTCWorker(QObject):
                 except Exception:
                     return
 
+                if data.get("type") == "toggle":
+                    await self.__handleToggle(data)
                 if data.get("type") == "terminate":
                     await self.__handle_shutdown()
                 if data.get("type") == "dimensions":
@@ -392,6 +400,22 @@ class WebRTCWorker(QObject):
                 )
             )
         return RTCConfiguration(iceServers=servers)
+    
+    def __handleToggle(self, data):
+        device = data.get("device")
+        match device:
+            case "mic":
+                print("mic status is now", data.get("value"))
+                self.mic_status_changed.emit(data.get("value"))
+            case "vid":
+                print("vid status is now", data.get("value"))
+                self.vid_status_changed.emit(data.get("value"))
+            case "media":
+                print("media status is now", data.get("value"))
+                self.mic_status_changed.emit(data.get("value"))
+                self.vid_status_changed.emit(data.get("value"))
+            case _:
+                print("Error, unknown trigger source")
 
     # TRACK HANDLER
     async def __handle_video_track(self, track: MediaStreamTrack):
