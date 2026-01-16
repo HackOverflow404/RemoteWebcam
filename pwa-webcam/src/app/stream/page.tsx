@@ -94,6 +94,7 @@ function StreamPage() {
     stopStream,
     replaceTrack,
     handleRotate,
+    relayToggle,
     isStreamOn,
     connectionStatus,
     error: RTCStreamError,
@@ -342,7 +343,7 @@ function StreamPage() {
                     ? "text-gray-500"
                     : "text-red-500"
                 }`}
-                aria-label={"Connection status: " + connectionStatus}
+              aria-label={"Connection status: " + connectionStatus}
             >
               <span className="material-symbols-outlined">
                 {icons.connection[connectionStatus]}
@@ -365,7 +366,7 @@ function StreamPage() {
 
             <div className="flex flex-row w-full justify-evenly">
               <button
-                onClick={toggleMic}
+                onClick={() => { toggleMic(); relayToggle("mic", isMicOn == "on" ? "off" : "on"); }}
                 className="p-3 w-15 h-15 flex items-center justify-center"
                 style={{ transform: `rotate(-${rotateDeg}deg)` }}
                 aria-label={
@@ -381,7 +382,7 @@ function StreamPage() {
               </button>
 
               <button
-                onClick={toggleMedia}
+                onClick={() => { toggleMedia(); relayToggle("media", isMicOn == "off" && isVidOn == "off" ? "on" : "off"); }}
                 className={`p-3 w-15 h-15 flex items-center justify-center ${isStreamOn
                   ? "text-red-500"
                   : connectionStatus === "connecting"
@@ -402,7 +403,7 @@ function StreamPage() {
               </button>
 
               <button
-                onClick={toggleVid}
+                onClick={() => { toggleVid(); relayToggle("cam", isVidOn == "on" ? "off" : "on"); }}
                 className="p-3 w-15 h-15 flex items-center justify-center"
                 style={{ transform: `rotate(-${rotateDeg}deg)` }}
                 aria-label={isVidOn === "on" ? "Stop Video" : "Start Video"}

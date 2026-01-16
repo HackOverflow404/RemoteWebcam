@@ -190,7 +190,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     }
   };
 
-  function getOutputDims(resolution: string) {
+  const getOutputDims = (resolution: string) =>  {
     // Keep output constant so WebRTC never renegotiates on rotation.
     switch (resolution) {
       case "4k":
@@ -203,7 +203,26 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     return { w: 1280, h: 720 }; // hd default
   }
 
-  async function fetchIceServers() {
+  const relayToggle = (trigger: "mic" | "cam" | "media", state: MediaState) => {
+    if (dcRef.current) {
+      switch (trigger) {
+        case "mic":
+          dcRef.current.send(JSON.stringify({"type": "toggle", device: "mic", "value": state, "source": "pwa"}));
+          break;
+        case "cam":
+          dcRef.current.send(JSON.stringify({"type": "toggle", device: "cam", "value": state, "source": "pwa"}));
+          break;
+        case "media":
+          dcRef.current.send(JSON.stringify({"type": "toggle", device: "media", "value": state, "source": "pwa"}));
+          break;
+        default:
+          log("relayToggle()", "unknown trigger source");
+          break;
+      };
+    }
+  }
+
+  const fetchIceServers = async () => {
     const resp = await fetch(
       "https://getturncredentials-qaf2yvcrrq-uc.a.run.app",
       { method: "POST" }
@@ -411,6 +430,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     isStreamOn: on,
     connectionStatus: status,
     error,
+    relayToggle,
     handleRotate,
     replaceTrack,
     startStream,
