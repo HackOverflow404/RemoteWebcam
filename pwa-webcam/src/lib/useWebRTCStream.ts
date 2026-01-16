@@ -43,7 +43,8 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
   const outDimsRef = useRef<{ w: number; h: number } | null>(null);
   const sourceVideoTrackRef = useRef<MediaStreamTrack | null>(null);
   const statsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
+  const wakeLock = useRef<WakeLockSentinel | null>(null);
+  
   const [status, setStatus] = useState<ConnectionState>("disconnected");
   const [error, setError] = useState<string | null>(null);
   const [on, setOn] = useState(false);
@@ -119,7 +120,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
   }, []);
 
   const cleanup = useCallback(
-    (reason?: string) => {
+    async (reason?: string) => {
       log("cleanup()", reason ?? "");
 
       if (reason !== "remote-linux-termination") {
@@ -139,6 +140,15 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
           peerRef.current.close();
         } catch {}
         peerRef.current = null;
+      }
+
+      if (wakeLock.current) {
+        try {
+          await wakeLock.current.release();
+          wakeLock.current = null;
+        } catch (err: any) {
+          log(`${err.name}: ${err.message}`);
+        }
       }
 
       cleanupProcessedVideo();
@@ -343,6 +353,12 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       }
 
       await pc.setRemoteDescription(answer);
+      
+      wakeLock.current = await navigator.wakeLock.request('screen');
+      wakeLock.current.addEventListener('release', () => {
+        console.log('Wake Lock was released');
+      });
+      console.log('Wake Lock is active');
       log("WebRTC fully established");
     } catch (e: any) {
       console.error("WebRTC error:", e);

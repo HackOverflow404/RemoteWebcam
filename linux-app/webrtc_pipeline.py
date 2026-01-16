@@ -97,7 +97,7 @@ class WebRTCWorker(QObject):
         self._thread = None
     
     def toggle_cam(self, isChecked: bool):
-        desired = "off" if isChecked else "on"
+        desired = "on" if isChecked else "off"
         msg = json.dumps({"type": "toggle_cam", "value": desired, "source": "linux"})
 
         if not self.data_channels:
@@ -112,7 +112,7 @@ class WebRTCWorker(QObject):
                     asyncio.run_coroutine_threadsafe(self._send_message(ch, msg), self.loop)
 
     def toggle_mic(self, isChecked: bool):
-        desired = "off" if isChecked else "on"
+        desired = "on" if isChecked else "off"
         msg = json.dumps({"type": "toggle_mic", "value": desired, "source": "linux"})
 
         if not self.data_channels:

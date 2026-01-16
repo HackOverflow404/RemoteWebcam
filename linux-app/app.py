@@ -67,6 +67,8 @@ class PixelStreamerApp(QMainWindow):
             button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             if i > 1:
                 button.setCheckable(True)
+                button.setChecked(True)
+                button.setEnabled(False)
             button.clicked.connect(lambda checked, b=button: self.on_button_click(b))
             sidebar_layout.addWidget(button)
             self.button_widgets[label] = button
@@ -170,13 +172,14 @@ class PixelStreamerApp(QMainWindow):
         if hasattr(self, "tray_action_cam") and cam_btn and cam_btn.isCheckable():
             self.tray_action_cam.blockSignals(True)
             self.tray_action_cam.setChecked(cam_btn.isChecked())
+            self.tray_action_cam.setEnabled(cam_btn.isEnabled())
             self.tray_action_cam.blockSignals(False)
 
         if hasattr(self, "tray_action_mic") and mic_btn and mic_btn.isCheckable():
             self.tray_action_mic.blockSignals(True)
             self.tray_action_mic.setChecked(mic_btn.isChecked())
+            self.tray_action_mic.setEnabled(mic_btn.isEnabled())
             self.tray_action_mic.blockSignals(False)
-
     
     def on_tray_code_action(self):
         """
@@ -218,7 +221,6 @@ class PixelStreamerApp(QMainWindow):
             except Exception as e:
                 print("toggle_cam failed:", e)
 
-
     def on_tray_toggle_mic(self, checked: bool):
         # Sync sidebar button state
         btn = self.button_widgets.get("Microphone")
@@ -233,7 +235,6 @@ class PixelStreamerApp(QMainWindow):
                 self.worker.toggle_mic(checked)
             except Exception as e:
                 print("toggle_mic failed:", e)
-
 
     def on_button_click(self, button):
         if button.text() == self.buttons[0] or button.text() == "Error":
@@ -322,9 +323,13 @@ class PixelStreamerApp(QMainWindow):
 
         if state == ConnectionState.DISCONNECTED:
             self.reset_session_ui()
-
+        elif state == ConnectionState.CONNECTED:
+            self.button_widgets.get("Microphone").setEnabled(True)
+            self.button_widgets.get("Webcam").setEnabled(True)
+        
         self.connection_status.setText(f"Connection: {state.value.capitalize()}")
         self.connection_status.setStyleSheet(f"color: {color_map[state]}")
+        
 
     @Slot(object)
     def on_frame(self, frame: np.ndarray):
@@ -379,6 +384,9 @@ class PixelStreamerApp(QMainWindow):
         if btn:
             btn.setText("Generate Code")
             btn.setEnabled(True)
+        
+        self.button_widgets.get("Microphone").setEnabled(False)
+        self.button_widgets.get("Webcam").setEnabled(False)
 
         if hasattr(self, "tray_action_code"):
             self.tray_action_code.setText("Generate Code")
