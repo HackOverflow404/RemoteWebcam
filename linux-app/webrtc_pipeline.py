@@ -401,14 +401,14 @@ class WebRTCWorker(QObject):
             )
         return RTCConfiguration(iceServers=servers)
     
-    def __handleToggle(self, data):
+    async def __handleToggle(self, data):
         device = data.get("device")
         match device:
             case "mic":
                 print("mic status is now", data.get("value"))
                 self.mic_status_changed.emit(data.get("value"))
-            case "vid":
-                print("vid status is now", data.get("value"))
+            case "cam":
+                print("cam status is now", data.get("value"))
                 self.vid_status_changed.emit(data.get("value"))
             case "media":
                 print("media status is now", data.get("value"))

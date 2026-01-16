@@ -294,6 +294,8 @@ class PixelStreamerApp(QMainWindow):
         
         if self.code != "Error":
             self.worker = WebRTCWorker(code=self.code)
+            self.worker.mic_status_changed.connect(self.on_mic_status)
+            self.worker.vid_status_changed.connect(self.on_vid_status)
             self.worker.connection_state_changed.connect(self.on_connection_status)
             self.worker.video_frame_received.connect(self.on_frame)
             self.worker.start()
