@@ -1,10 +1,9 @@
 export interface ProcessedTrack {
   track: MediaStreamTrack;
   stop: () => void;
-  setRotation: (r: Rotation) => void;
+  setRotation: (r: number) => void;
 }
 
-export type Rotation = 0 | 90 | -90;
 export type FitMode = "contain" | "cover";
 
 export function createTransformedTrack(
@@ -14,7 +13,7 @@ export function createTransformedTrack(
     outH: number;
     fps?: number;
     mirror?: boolean;
-    rotation?: Rotation;
+    rotation?: number;
     fit?: FitMode;
     background?: string;
   }
@@ -49,10 +48,10 @@ export function createTransformedTrack(
   let running = true;
   let ready = false;
 
-  let rot: Rotation = rotation;
+  let rot: number = rotation;
   let rad = rot === 90 ? Math.PI / 2 : rot === -90 ? -Math.PI / 2 : 0;
 
-  const setRotation = (r: Rotation) => {
+  const setRotation = (r: number) => {
     rot = r;
     rad = rot === 90 ? Math.PI / 2 : rot === -90 ? -Math.PI / 2 : 0;
   };

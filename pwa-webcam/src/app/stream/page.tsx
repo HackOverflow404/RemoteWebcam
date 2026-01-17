@@ -58,9 +58,7 @@ function StreamPage() {
   const resolution = "hd";
   const exposure = 0;
 
-  const [vp, setVp] = useState({ w: 1, h: 1 });
-  const [safeRaw, setSafeRaw] = useState({ t: 0, r: 0, b: 0, l: 0 });
-  const [rotateDeg, setRotateDeg] = useState<0 | 90 | -90>(0);
+  const [rot, setRot] = useState<number>(0);
 
   const handleRemoteTermination = useCallback(() => {
     setTimeout(() => router.push("/"), 1500);
@@ -121,156 +119,61 @@ function StreamPage() {
   // --- initial media + stream startup ---
   useEffect(() => {
     if (sessionCode) startMedia();
-  }, [sessionCode]); // keep your original dependency choice
+  }, [sessionCode]);
 
   useEffect(() => {
     if (media && !isLoadingMedia && !isStreamOn) startStream();
-  }, [media, isLoadingMedia]); // keep your original dependency choice
+  }, [media, isLoadingMedia]);
 
   useEffect(() => {
     if (connectionStatus === "disconnected" && isStreamOn) stopMedia();
-  }, [connectionStatus]); // keep your original dependency choice
+  }, [connectionStatus]);
 
   // --- rotation + viewport sizing ---
   useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const read = () => {
-      const s = getComputedStyle(document.documentElement);
-      const px = (v: string) => Math.round(parseFloat(v || "0")) || 0;
-      setSafeRaw({
-        t: px(s.getPropertyValue("--sat")),
-        r: px(s.getPropertyValue("--sar")),
-        b: px(s.getPropertyValue("--sab")),
-        l: px(s.getPropertyValue("--sal")),
-      });
+    const handleOrientationChange = (e: Event) => {
+      const screenOrientation = e?.target as ScreenOrientation;
+      if (screenOrientation) {
+        console.log("Rotated: ", screenOrientation?.angle);
+        setRot(screenOrientation?.angle);
+        handleRotate(screenOrientation?.angle);
+      }
     };
 
-    read();
-    window.addEventListener("resize", read);
-    window.visualViewport?.addEventListener?.("resize", read);
+    window.screen.orientation.addEventListener('change', handleOrientationChange);
+
     return () => {
-      window.removeEventListener("resize", read);
-      window.visualViewport?.removeEventListener?.("resize", read);
+      window.screen.orientation.removeEventListener('change', handleOrientationChange);
     };
   }, []);
-
-  const safe = useMemo(() => {
-    const { t, r, b, l } = safeRaw;
-
-    if (rotateDeg === 0) return { t, r, b, l };
-
-    // rotateDeg === 90: content-top aligns to physical-left, etc.
-    if (rotateDeg === 90) return { t: l, r: t, b: r, l: b };
-
-    // rotateDeg === -90
-    return { t: r, r: b, b: l, l: t };
-  }, [safeRaw, rotateDeg]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const mq = window.matchMedia?.("(orientation: landscape)");
-    let raf = 0;
-
-    const recompute = () => {
-      const vv = window.visualViewport;
-      const w = Math.round(vv?.width ?? window.innerWidth);
-      const h = Math.round(vv?.height ?? window.innerHeight);
-      setVp({ w, h });
-
-      if (raf) cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => {
-        handleRotate(w, h);
-      });
-
-      const isLandscape = mq?.matches ?? w > h;
-
-      if (!isLandscape) {
-        setRotateDeg(0);
-        return;
-      }
-
-      const type = window.screen?.orientation?.type;
-      if (type === "landscape-secondary") return setRotateDeg(-90);
-      if (type === "landscape-primary") return setRotateDeg(90);
-
-      const screenAngle = (window.screen?.orientation?.angle ?? 0) as number;
-      const legacyAngle =
-        typeof (window as any).orientation === "number"
-          ? (window as any).orientation
-          : 0;
-      const angle = screenAngle || legacyAngle || 0;
-
-      setRotateDeg(angle === -90 || angle === 270 ? -90 : 90);
-    };
-
-    recompute();
-
-    window.addEventListener("resize", recompute);
-    window.addEventListener("orientationchange", recompute);
-    window.visualViewport?.addEventListener?.("resize", recompute);
-
-    if (mq?.addEventListener) mq.addEventListener("change", recompute);
-    else if ((mq as any)?.addListener) (mq as any).addListener(recompute);
-
-    window.screen?.orientation?.addEventListener?.("change", recompute);
-
-    return () => {
-      if (raf) cancelAnimationFrame(raf);
-      window.removeEventListener("resize", recompute);
-      window.removeEventListener("orientationchange", recompute);
-      window.visualViewport?.removeEventListener?.("resize", recompute);
-
-      if (mq?.removeEventListener) mq.removeEventListener("change", recompute);
-      else if ((mq as any)?.removeListener)
-        (mq as any).removeListener(recompute);
-
-      window.screen?.orientation?.removeEventListener?.("change", recompute);
-    };
-  }, [handleRotate, isStreamOn]);
-
-  // Stage style: rotate the whole “surface” and translate it into view
-  const stageStyle = useMemo<React.CSSProperties>(() => {
-    const W = vp.w;
-    const H = vp.h;
-
-    if (rotateDeg === 0) {
-      return {
-        position: "fixed",
-        inset: 0,
-        width: W,
-        height: H,
-        transform: "none",
-      };
-    }
-
-    // In landscape, pre-rotate size is swapped so the rotated bbox matches viewport
-    return {
-      position: "fixed",
-      top: "50%",
-      left: "50%",
-      width: H,
-      height: W,
-      transformOrigin: "center",
-      transform: `translate(-50%, -50%) rotate(${rotateDeg}deg)`,
-    };
-  }, [rotateDeg, vp.w, vp.h]);
 
   const handleBack = useCallback(() => {
     stopStream();
     router.push("/");
   }, [stopStream, router]);
 
+  // Calculate dimensions based on rotation
+  const isLandscape = rot === 90 || rot === 270 || rot === -90;
+  const containerWidth = isLandscape ? "100dvh" : "100dvw";
+  const containerHeight = isLandscape ? "100dvw" : "100dvh";
+
   return (
     <section
       className="fixed inset-0 overflow-hidden bg-black"
+      style={{
+        transform: `rotate(${-rot}deg)`,
+        transformOrigin: "center center",
+        width: containerWidth,
+        height: containerHeight,
+        left: isLandscape ? `calc((100dvw - 100dvh) / 2)` : "0",
+        top: isLandscape ? `calc((100dvh - 100dvw) / 2)` : "0",
+      }}
       onDoubleClick={async () => {
         console.log("Double tap registered");
         const newTrack = await flipCamera();
         if (newTrack && isStreamOn) replaceTrack("video", newTrack);
       }}>
-      <div style={stageStyle}>
+      <div>
         {isLoadingMedia && (
           <div className="absolute inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 pointer-events-none">
             <div className="text-white text-2xl" aria-label="Loading Media">Loading Media...</div>
@@ -284,10 +187,10 @@ function StreamPage() {
           muted
           controls={false}
           style={{
-            transform: `scale(${isFrontCamera ? "-" : ""}1, 1)`,
+            transform: `scaleX(${isFrontCamera ? "-1" : "1"})`,
             transition: "opacity 0.3s ease",
-            width: rotateDeg == 0 ? "100dvw" : vp.h,
-            height: rotateDeg == 0 ? "100dvh" : vp.w,
+            width: "100%",
+            height: "100%",
             objectFit: "cover",
           }}
           className="absolute inset-0 object-cover z-0 m-0 p-0"
@@ -296,7 +199,6 @@ function StreamPage() {
         {errorMessage && (
           <div
             className="absolute top-24 left-0 right-0 flex justify-center animate-pulse z-20"
-            style={{ transform: `rotate(-${rotateDeg}deg)` }}
             aria-label={"Error Message: " + errorMessage}
           >
             <div className="bg-red-500 text-white px-4 py-2 rounded-md flex items-center">
@@ -311,19 +213,15 @@ function StreamPage() {
         {/* Overlay */}
         <div
           className="absolute inset-0 flex flex-col items-center z-10"
-          style={{
-            paddingTop: safe.t,
-            paddingRight: safe.r,
-            paddingBottom: safe.b,
-            paddingLeft: safe.l,
-          }}
         >
-          <header className={`flex absolute top-0 left-0 right-0 w-full py-5 justify-evenly z-10 ${rotateDeg == 0 ? "" : "mt-10"}`}>
+          <header className={`flex absolute top-0 left-0 right-0 w-full py-5 justify-evenly z-10`}>
             <button
               onClick={handleBack}
               className="p-3"
-              style={{ transform: `rotate(-${rotateDeg}deg)` }}
               aria-label="Return"
+              style={{
+                transform: `rotate(${rot}deg)`,
+              }}
             >
               <span className="material-symbols-outlined">keyboard_return</span>
             </button>
@@ -368,10 +266,12 @@ function StreamPage() {
               <button
                 onClick={() => { toggleMic(); relayToggle("mic", isMicOn == "on" ? "off" : "on"); }}
                 className="p-3 w-15 h-15 flex items-center justify-center"
-                style={{ transform: `rotate(-${rotateDeg}deg)` }}
                 aria-label={
                   isMicOn === "on" ? "Mute Microphone" : "Unmute Microphone"
                 }
+                style={{
+                  transform: `rotate(${rot}deg)`,
+                }}
               >
                 <span
                   className="material-symbols-outlined"
@@ -389,8 +289,10 @@ function StreamPage() {
                     ? "text-yellow-500"
                     : "text-green-500"
                   }`}
-                style={{ transform: `rotate(-${rotateDeg}deg)` }}
                 aria-label={isStreamOn ? "Pause Streaming" : "Resume Streaming"}
+                style={{
+                  transform: `rotate(${rot}deg)`,
+                }}
               >
                 <span
                   className="material-symbols-outlined"
@@ -405,8 +307,10 @@ function StreamPage() {
               <button
                 onClick={() => { toggleVid(); relayToggle("cam", isVidOn == "on" ? "off" : "on"); }}
                 className="p-3 w-15 h-15 flex items-center justify-center"
-                style={{ transform: `rotate(-${rotateDeg}deg)` }}
                 aria-label={isVidOn === "on" ? "Stop Video" : "Start Video"}
+                style={{
+                  transform: `rotate(${rot}deg)`,
+                }}
               >
                 <span
                   className="material-symbols-outlined"
