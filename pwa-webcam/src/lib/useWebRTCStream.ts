@@ -33,7 +33,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
   const propsRef = useRef(initialProps);
   useEffect(() => {
     propsRef.current = initialProps;
-  }, [initialProps]);
+  });
 
   const startedRef = useRef(false);
   const rotationRef = useRef<Rotation>(0);
@@ -44,11 +44,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
   const sourceVideoTrackRef = useRef<MediaStreamTrack | null>(null);
   const statsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const wakeLock = useRef<WakeLockSentinel | null>(null);
-
-  const lastAspectRef = useRef<number | null>(null);
-  const stableCountRef = useRef(0);
-  const ROTATION_STABLE_THRESHOLD = 3; // frames
-
+  
   const [status, setStatus] = useState<ConnectionState>("disconnected");
   const [error, setError] = useState<string | null>(null);
   const [on, setOn] = useState(false);
@@ -97,37 +93,31 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     }
   }, []);
 
-  const computeRotation = (videoW: number, videoH: number): Rotation => {
-    // Portrait camera frames should NEVER be rotated
-    if (videoH >= videoW) return 0;
+  const computeRotation = (w: number, h: number): Rotation => {
+    const isLandscape = w > h;
+    if (!isLandscape) return 0;
 
-    // Geometry says landscape → we may need rotation
-    // Orientation is only a hint, never a source of truth
-    const orientation = window.screen?.orientation;
+    const type = window.screen?.orientation?.type;
+    if (type === "landscape-secondary") return -90;
+    if (type === "landscape-primary") return 90;
 
-    const angle =
-      typeof orientation?.angle === "number"
-        ? orientation.angle
-        : typeof (window as any).orientation === "number"
+    const screenAngle = (window.screen?.orientation?.angle ?? 0) as number;
+    const legacyAngle =
+      typeof (window as any).orientation === "number"
         ? (window as any).orientation
         : 0;
 
-    // Normalize
-    const normalized = ((angle % 360) + 360) % 360;
-
-    // Only accept *clear* landscape signals
-    if (normalized === 90) return 90;
-    if (normalized === 270) return -90;
-
-    // Default safe rotation for landscape sensor
-    return 90;
+    const angle = screenAngle || legacyAngle || 0;
+    return angle === -90 || angle === 270 ? -90 : 90;
   };
 
-  const handleRotate = (rot: 0 | 90) => {
+  const handleRotate = useCallback(async (w: number, h: number) => {
+    const rot = computeRotation(w, h);
     if (rot === rotationRef.current) return;
     rotationRef.current = rot;
+
     processedVideoRef.current?.setRotation(rot);
-  };
+  }, []);
 
   const cleanup = useCallback(
     async (reason?: string) => {
@@ -135,13 +125,9 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
 
       if (reason !== "remote-linux-termination") {
         if (dcRef.current?.readyState === "open") {
-          try {
-            dcRef.current.send(
-              JSON.stringify({ type: "terminate", source: "pwa" })
-            );
-          } catch (err: any) {
-            log("cleanup(), errored", err);
-          }
+          dcRef.current.send(
+            JSON.stringify({ type: "terminate", source: "pwa" })
+          );
         }
       }
 
@@ -204,7 +190,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     }
   };
 
-  const getOutputDims = (resolution: string) => {
+  const getOutputDims = (resolution: string) =>  {
     // Keep output constant so WebRTC never renegotiates on rotation.
     switch (resolution) {
       case "4k":
@@ -215,47 +201,26 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
         return { w: 640, h: 480 };
     }
     return { w: 1280, h: 720 }; // hd default
-  };
+  }
 
   const relayToggle = (trigger: "mic" | "cam" | "media", state: MediaState) => {
     if (dcRef.current) {
       switch (trigger) {
         case "mic":
-          dcRef.current.send(
-            JSON.stringify({
-              type: "toggle",
-              device: "mic",
-              value: state,
-              source: "pwa",
-            })
-          );
+          dcRef.current.send(JSON.stringify({"type": "toggle", device: "mic", "value": state, "source": "pwa"}));
           break;
         case "cam":
-          dcRef.current.send(
-            JSON.stringify({
-              type: "toggle",
-              device: "cam",
-              value: state,
-              source: "pwa",
-            })
-          );
+          dcRef.current.send(JSON.stringify({"type": "toggle", device: "cam", "value": state, "source": "pwa"}));
           break;
         case "media":
-          dcRef.current.send(
-            JSON.stringify({
-              type: "toggle",
-              device: "media",
-              value: state,
-              source: "pwa",
-            })
-          );
+          dcRef.current.send(JSON.stringify({"type": "toggle", device: "media", "value": state, "source": "pwa"}));
           break;
         default:
           log("relayToggle()", "unknown trigger source");
           break;
-      }
+      };
     }
-  };
+  }
 
   const fetchIceServers = async () => {
     const resp = await fetch(
@@ -268,7 +233,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       username: s.username,
       credential: s.credential,
     }));
-  };
+  }
 
   const startStream = useCallback(async () => {
     if (startedRef.current || peerRef.current) {
@@ -329,14 +294,14 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
               propsRef.current.toggleMic();
             }
           }
-
+          
           if (msg.type === "toggle_cam" && msg.source === "linux") {
             if (propsRef.current.isVidOn !== msg.value.toLowerCase()) {
               console.log("Linux toggled cam");
               propsRef.current.toggleVid();
             }
           }
-
+          
           if (msg.type === "terminate" && msg.source === "linux") {
             console.log("Linux terminated session");
             cleanup("remote-linux-termination");
@@ -352,11 +317,9 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
           sourceVideoTrackRef.current = track;
           cleanupProcessedVideo();
 
-          const settings = track.getSettings();
-          const w = settings.width ?? 0;
-          const h = settings.height ?? 0;
-
-          rotationRef.current = computeRotation(w, h);
+          const w = window.visualViewport?.width ?? window.innerWidth;
+          const h = window.visualViewport?.height ?? window.innerHeight;
+          rotationRef.current = computeRotation(Math.round(w), Math.round(h));
 
           const processed = buildProcessed(track, rotationRef.current);
           processedVideoRef.current = processed;
@@ -367,8 +330,9 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
         }
       });
 
+      
       await pc.setLocalDescription(await pc.createOffer());
-
+      
       startStatsLogging(pc);
 
       await new Promise<void>((resolve) => {
@@ -408,13 +372,13 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       }
 
       await pc.setRemoteDescription(answer);
-
+      
       try {
-        wakeLock.current = await navigator.wakeLock.request("screen");
-        wakeLock.current.addEventListener("release", () => {
-          console.log("Wake Lock was released");
+        wakeLock.current = await navigator.wakeLock.request('screen');
+        wakeLock.current.addEventListener('release', () => {
+          console.log('Wake Lock was released');
         });
-        console.log("Wake Lock is active");
+      console.log('Wake Lock is active');
       } catch (error) {
         log("startStream() wakeLock failed");
       }
