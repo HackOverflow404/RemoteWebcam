@@ -15,7 +15,6 @@ const AudioVolumeIndicator = React.lazy(
 
 import useMediaStream from "@/lib/useMediaStream";
 import useWebRTCStream from "@/lib/useWebRTCStream";
-import useOrientationState from "@/lib/useOrientationState";
 
 // --- Icon mappings ---
 const icons = {
@@ -59,7 +58,7 @@ function StreamPage() {
   const resolution = "hd";
   const exposure = 0;
 
-  const { isLandscape, angle: rot } = useOrientationState();
+  const [rot, setRot] = useState<number>(0);
 
   const handleRemoteTermination = useCallback(() => {
     setTimeout(() => router.push("/"), 1500);
@@ -154,6 +153,7 @@ function StreamPage() {
       raf = requestAnimationFrame(() => {
         setTimeout(() => {
           const angle = normalize(getAngle());
+          setRot(angle);
           handleRotate(angle);
         }, 50);
       });
@@ -161,10 +161,6 @@ function StreamPage() {
 
     // Run once on mount (important on iOS)
     emit();
-
-    const handleVisibilityChange = () => {
-      if (!document.hidden) emit();
-    }
 
     // iOS Safari triggers this reliably
     window.addEventListener("orientationchange", emit, { passive: true });
@@ -177,7 +173,9 @@ function StreamPage() {
 
     // Coming back from background often needs a refresh
     window.addEventListener("pageshow", emit, { passive: true });
-    document.addEventListener("visibilitychange", handleVisibilityChange);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) emit();
+    });
 
     // Use ScreenOrientation event where it exists (harmless on iOS; helpful elsewhere)
     window.screen?.orientation?.addEventListener?.("change", emit);
@@ -189,8 +187,6 @@ function StreamPage() {
       window.visualViewport?.removeEventListener("resize", emit);
       window.removeEventListener("pageshow", emit);
       window.screen?.orientation?.removeEventListener?.("change", emit);
-      window.removeEventListener("visibilitychange", handleVisibilityChange);
-
     };
   }, [handleRotate]);
 
@@ -200,8 +196,9 @@ function StreamPage() {
   }, [stopStream, router]);
 
   // Calculate dimensions based on rotation
-  const containerWidth = isLandscape ? "var(--app-vh)" : "var(--app-vw)";
-  const containerHeight = isLandscape ? "var(--app-vw)" : "var(--app-vh)";
+  const isLandscape = rot === 90 || rot === 270 || rot === -90;
+  const containerWidth = isLandscape ? "100dvh" : "100dvw";
+  const containerHeight = isLandscape ? "100dvw" : "100dvh";
 
   return (
     <section
@@ -211,8 +208,8 @@ function StreamPage() {
         transformOrigin: "center center",
         width: containerWidth,
         height: containerHeight,
-        left: isLandscape ? `calc((var(--app-vw) - var(--app-vh)) / 2)` : "0",
-        top: isLandscape ? `calc((var(--app-vh) - var(--app-vw)) / 2)` : "0",
+        left: isLandscape ? `calc((100dvw - 100dvh) / 2)` : "0",
+        top: isLandscape ? `calc((100dvh - 100dvw) / 2)` : "0",
       }}
       onDoubleClick={async () => {
         console.log("Double tap registered");
