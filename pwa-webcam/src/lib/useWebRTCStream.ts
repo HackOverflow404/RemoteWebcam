@@ -1,7 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import {
   createTransformedTrack,
-  Rotation,
   ProcessedTrack,
 } from "@/lib/videoTransforms";
 
@@ -36,7 +35,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
   });
 
   const startedRef = useRef(false);
-  const rotationRef = useRef<Rotation>(0);
+  const rotationRef = useRef<number>(0);
   const dcRef = useRef<RTCDataChannel | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const processedVideoRef = useRef<ProcessedTrack | null>(null);
@@ -67,7 +66,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
   }, []);
 
   const buildProcessed = useCallback(
-    (track: MediaStreamTrack, rot: Rotation) => {
+    (track: MediaStreamTrack, rot: number) => {
       const { fps, isFrontCamera } = propsRef.current;
       const { w, h } = lockOutputDimsOnce();
 
@@ -93,7 +92,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     }
   }, []);
 
-  const computeRotation = (w: number, h: number): Rotation => {
+  const computeRotation = (w: number, h: number): number => {
     const isLandscape = w > h;
     if (!isLandscape) return 0;
 
@@ -111,8 +110,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     return angle === -90 || angle === 270 ? -90 : 90;
   };
 
-  const handleRotate = useCallback(async (w: number, h: number) => {
-    const rot = computeRotation(w, h);
+  const handleRotate = useCallback(async (rot: number) => {
     if (rot === rotationRef.current) return;
     rotationRef.current = rot;
 
