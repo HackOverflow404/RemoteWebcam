@@ -284,7 +284,7 @@ function StreamPage() {
           muted
           controls={false}
           style={{
-            transform: `scale(${isFrontCamera ? "-" : ""}1, ${rotateDeg < 0 ? "-" : ""}1)`,
+            transform: `scale(${isFrontCamera ? "-" : ""}1, 1)`,
             transition: "opacity 0.3s ease",
             width: rotateDeg == 0 ? "100dvw" : vp.h,
             height: rotateDeg == 0 ? "100dvh" : vp.w,
