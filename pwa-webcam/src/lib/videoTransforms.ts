@@ -33,9 +33,6 @@ export function createTransformedTrack(
   video.autoplay = true;
   video.muted = true;
   video.playsInline = true;
-  video.style.position = "fixed";
-  video.style.left = "-9999px";
-  video.style.top = "-9999px";
   video.setAttribute("playsinline", "");
   video.setAttribute("muted", "");
 
@@ -57,16 +54,7 @@ export function createTransformedTrack(
 
   const setRotation = (r: Rotation) => {
     rot = r;
-    rad = r === 90 ? Math.PI / 2 : r === -90 ? -Math.PI / 2 : 0;
-
-    // Swap canvas dimensions on rotation
-    if (r === 90 || r === -90) {
-      canvas.width = outH;
-      canvas.height = outW;
-    } else {
-      canvas.width = outW;
-      canvas.height = outH;
-    }
+    rad = rot === 90 ? Math.PI / 2 : rot === -90 ? -Math.PI / 2 : 0;
   };
 
   const ensurePlay = () => {
@@ -101,17 +89,14 @@ export function createTransformedTrack(
         ? Math.max(cw / effW, ch / effH)
         : Math.min(cw / effW, ch / effH);
 
-    const drawW = effW * scale;
-    const drawH = effH * scale;
+    const drawW = srcW * scale;
+    const drawH = srcH * scale;
 
     ctx.save();
     ctx.translate(cw / 2, ch / 2);
     ctx.rotate(rad);
 
-    if (mirror) {
-      if (rot === 0) ctx.scale(-1, 1);
-      else ctx.scale(1, -1);
-    }
+    if (mirror) ctx.scale(-1, 1);
 
     ctx.drawImage(video, -drawW / 2, -drawH / 2, drawW, drawH);
     ctx.restore();
@@ -130,9 +115,7 @@ export function createTransformedTrack(
     draw();
 
     if (rvfc) {
-      vfcId = rvfc(() => {
-        if (running) loop();
-      });
+      vfcId = rvfc(() => loop());
     } else {
       rafId = requestAnimationFrame(loop);
     }

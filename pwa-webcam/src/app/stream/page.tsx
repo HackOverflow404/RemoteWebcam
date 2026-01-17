@@ -3,13 +3,11 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import React, {
   useState,
-  useRef,
   useCallback,
   useEffect,
   Suspense,
   useMemo,
 } from "react";
-import ErrorBoundary from "@/components/ErrorBoundary";
 
 const AudioVolumeIndicator = React.lazy(
   () => import("@/components/AudioVolumeIndicator")
@@ -56,18 +54,13 @@ function StreamPage() {
   const initialWebcam = webcam;
   const initialMic = mic;
 
-  const startingRef = useRef(false);
-
   const fps = "60";
   const resolution = "hd";
   const exposure = 0;
 
   const [vp, setVp] = useState({ w: 1, h: 1 });
   const [safeRaw, setSafeRaw] = useState({ t: 0, r: 0, b: 0, l: 0 });
-  const [rotateDeg, setRotateDeg] = useState<0 | 90>(0);
-
-  const lastRotation = useRef<0 | 90>(0);
-  const ROTATE_THRESHOLD = 80; // px
+  const [rotateDeg, setRotateDeg] = useState<0 | 90 | -90>(0);
 
   const handleRemoteTermination = useCallback(() => {
     setTimeout(() => router.push("/"), 1500);
@@ -128,31 +121,17 @@ function StreamPage() {
   // --- initial media + stream startup ---
   useEffect(() => {
     if (sessionCode) startMedia();
-  }, [sessionCode, startMedia]);
+  }, [sessionCode]); // keep your original dependency choice
 
   useEffect(() => {
-    if (!media || isLoadingMedia || isStreamOn || startingRef.current) return;
-    startingRef.current = true;
-    startStream().finally(() => {
-      startingRef.current = false;
-    });
-  }, [media, isLoadingMedia, isStreamOn, startStream]);
+    if (media && !isLoadingMedia && !isStreamOn) startStream();
+  }, [media, isLoadingMedia]); // keep your original dependency choice
 
-  // useEffect(() => {
-  //   if (connectionStatus === "disconnected" && isStreamOn) stopMedia();
-  // }, [connectionStatus, isStreamOn, stopMedia]);
+  useEffect(() => {
+    if (connectionStatus === "disconnected" && isStreamOn) stopMedia();
+  }, [connectionStatus]); // keep your original dependency choice
 
-  function computeRotation(
-    w: number,
-    h: number,
-    last: 0 | 90
-  ): 0 | 90 {
-    if (last === 0 && w - h > ROTATE_THRESHOLD) return 90;
-    if (last === 90 && h - w > ROTATE_THRESHOLD) return 0;
-    return last;
-  }
-
-
+  // --- rotation + viewport sizing ---
   useEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -191,41 +170,65 @@ function StreamPage() {
   useEffect(() => {
     if (typeof window === "undefined") return;
 
+    const mq = window.matchMedia?.("(orientation: landscape)");
     let raf = 0;
 
     const recompute = () => {
       const vv = window.visualViewport;
       const w = Math.round(vv?.width ?? window.innerWidth);
       const h = Math.round(vv?.height ?? window.innerHeight);
-
       setVp({ w, h });
 
       if (raf) cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
-        const rot = computeRotation(w, h, lastRotation.current);
-
-        if (rot !== lastRotation.current) {
-          lastRotation.current = rot;
-          setRotateDeg(rot);
-          handleRotate(rot);
-        }
+        handleRotate(w, h);
       });
+
+      const isLandscape = mq?.matches ?? w > h;
+
+      if (!isLandscape) {
+        setRotateDeg(0);
+        return;
+      }
+
+      const type = window.screen?.orientation?.type;
+      if (type === "landscape-secondary") return setRotateDeg(-90);
+      if (type === "landscape-primary") return setRotateDeg(90);
+
+      const screenAngle = (window.screen?.orientation?.angle ?? 0) as number;
+      const legacyAngle =
+        typeof (window as any).orientation === "number"
+          ? (window as any).orientation
+          : 0;
+      const angle = screenAngle || legacyAngle || 0;
+
+      setRotateDeg(angle === -90 || angle === 270 ? -90 : 90);
     };
 
     recompute();
 
     window.addEventListener("resize", recompute);
+    window.addEventListener("orientationchange", recompute);
     window.visualViewport?.addEventListener?.("resize", recompute);
+
+    if (mq?.addEventListener) mq.addEventListener("change", recompute);
+    else if ((mq as any)?.addListener) (mq as any).addListener(recompute);
+
     window.screen?.orientation?.addEventListener?.("change", recompute);
 
     return () => {
       if (raf) cancelAnimationFrame(raf);
       window.removeEventListener("resize", recompute);
+      window.removeEventListener("orientationchange", recompute);
       window.visualViewport?.removeEventListener?.("resize", recompute);
+
+      if (mq?.removeEventListener) mq.removeEventListener("change", recompute);
+      else if ((mq as any)?.removeListener)
+        (mq as any).removeListener(recompute);
+
       window.screen?.orientation?.removeEventListener?.("change", recompute);
     };
-  }, [handleRotate]);
-
+  }, [handleRotate, isStreamOn]);
 
   // Stage style: rotate the whole “surface” and translate it into view
   const stageStyle = useMemo<React.CSSProperties>(() => {
@@ -254,11 +257,6 @@ function StreamPage() {
     };
   }, [rotateDeg, vp.w, vp.h]);
 
-  const videoTransform = useMemo(() => {
-    const mirror = isFrontCamera ? "scaleX(-1)" : "";
-    return [mirror].filter(Boolean).join(" ");
-  }, [isFrontCamera]);
-
   const handleBack = useCallback(() => {
     stopStream();
     router.push("/");
@@ -286,10 +284,10 @@ function StreamPage() {
           muted
           controls={false}
           style={{
-            transform: videoTransform,
+            transform: `scale(${isFrontCamera ? "-" : ""}1, ${rotateDeg < 0 ? "-" : ""}1)`,
             transition: "opacity 0.3s ease",
-            width: rotateDeg === 0 ? "100dvw" : `${vp.h}px`,
-            height: rotateDeg === 0 ? "100dvh" : `${vp.w}px`,
+            width: rotateDeg == 0 ? "100dvw" : vp.h,
+            height: rotateDeg == 0 ? "100dvh" : vp.w,
             objectFit: "cover",
           }}
           className="absolute inset-0 object-cover z-0 m-0 p-0"
@@ -303,6 +301,9 @@ function StreamPage() {
           >
             <div className="bg-red-500 text-white px-4 py-2 rounded-md flex items-center">
               <span>{errorMessage}</span>
+              <button className="ml-2" onClick={() => { }}>
+                ✕
+              </button>
             </div>
           </div>
         )}
@@ -358,18 +359,9 @@ function StreamPage() {
           {/* Bottom settings */}
           <footer className="flex flex-col absolute bottom-0 left-0 right-0 w-full py-4 justify-evenly z-10">
             {isMicOn === "on" && media && media.getAudioTracks().length > 0 && (
-              <ErrorBoundary key={isMicOn} fallback={
-                <div className="text-xs text-gray-400">
-                  Mic meter unavailable
-                </div>
-              }>
-                <React.Suspense fallback={<div>Loading Mic Volume...</div>}>
-                  <AudioVolumeIndicator
-                    isEnabled={true}
-                    mediaStream={media}
-                  />
-                </React.Suspense>
-              </ErrorBoundary>
+              <React.Suspense fallback={<div>Loading Mic Volume...</div>}>
+                <AudioVolumeIndicator isEnabled={true} mediaStream={media} />
+              </React.Suspense>
             )}
 
             <div className="flex flex-row w-full justify-evenly">
@@ -390,7 +382,7 @@ function StreamPage() {
               </button>
 
               <button
-                onClick={() => { toggleMedia(); relayToggle("media", isMicOn === "on" || isVidOn === "on" ? "off" : "on"); }}
+                onClick={() => { toggleMedia(); relayToggle("media", isMicOn == "off" && isVidOn == "off" ? "on" : "off"); }}
                 className={`p-3 w-15 h-15 flex items-center justify-center ${isStreamOn
                   ? "text-red-500"
                   : connectionStatus === "connecting"
