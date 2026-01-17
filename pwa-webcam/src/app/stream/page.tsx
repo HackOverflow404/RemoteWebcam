@@ -131,21 +131,64 @@ function StreamPage() {
 
   // --- rotation + viewport sizing ---
   useEffect(() => {
-    const handleOrientationChange = (e: Event) => {
-      const screenOrientation = e?.target as ScreenOrientation;
-      if (screenOrientation) {
-        console.log("Rotated: ", screenOrientation?.angle);
-        setRot(screenOrientation?.angle);
-        handleRotate(screenOrientation?.angle);
-      }
+    let raf = 0;
+
+    const normalize = (deg: number) => ((deg % 360) + 360) % 360;
+
+    const getAngle = () => {
+      // 1) Modern browsers (Chrome/Android, some iOS contexts)
+      const so = window.screen?.orientation;
+      if (so && typeof so.angle === "number") return so.angle;
+
+      // 2) iOS Safari (most reliable)
+      const w = window as unknown as { orientation?: number };
+      if (typeof w.orientation === "number") return w.orientation;
+
+      // 3) Fallback heuristic
+      return window.innerWidth > window.innerHeight ? 90 : 0;
     };
 
-    window.screen.orientation.addEventListener('change', handleOrientationChange);
+    const emit = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        setTimeout(() => {
+          const angle = normalize(getAngle());
+          setRot(angle);
+          handleRotate(angle);
+        }, 50);
+      });
+    };
+
+    // Run once on mount (important on iOS)
+    emit();
+
+    // iOS Safari triggers this reliably
+    window.addEventListener("orientationchange", emit, { passive: true });
+
+    // Also useful because Safari sometimes “resizes” without firing orientationchange
+    window.addEventListener("resize", emit, { passive: true });
+
+    // Best signal for the *visual* viewport on iOS (address bar collapse/expand, etc.)
+    window.visualViewport?.addEventListener("resize", emit, { passive: true });
+
+    // Coming back from background often needs a refresh
+    window.addEventListener("pageshow", emit, { passive: true });
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) emit();
+    });
+
+    // Use ScreenOrientation event where it exists (harmless on iOS; helpful elsewhere)
+    window.screen?.orientation?.addEventListener?.("change", emit);
 
     return () => {
-      window.screen.orientation.removeEventListener('change', handleOrientationChange);
+      cancelAnimationFrame(raf);
+      window.removeEventListener("orientationchange", emit);
+      window.removeEventListener("resize", emit);
+      window.visualViewport?.removeEventListener("resize", emit);
+      window.removeEventListener("pageshow", emit);
+      window.screen?.orientation?.removeEventListener?.("change", emit);
     };
-  }, []);
+  }, [handleRotate]);
 
   const handleBack = useCallback(() => {
     stopStream();
