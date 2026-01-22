@@ -149,6 +149,7 @@ function StreamPage() {
     };
 
     const emit = () => {
+      console.log("Rotation detected");
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
         setTimeout(() => {
