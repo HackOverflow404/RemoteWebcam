@@ -159,6 +159,10 @@ function StreamPage() {
       });
     };
 
+    const handleVisibilityChange = () => {
+      if (!document.hidden) emit();
+    }
+
     // Run once on mount (important on iOS)
     emit();
 
@@ -173,9 +177,7 @@ function StreamPage() {
 
     // Coming back from background often needs a refresh
     window.addEventListener("pageshow", emit, { passive: true });
-    document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) emit();
-    });
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     // Use ScreenOrientation event where it exists (harmless on iOS; helpful elsewhere)
     window.screen?.orientation?.addEventListener?.("change", emit);
@@ -187,6 +189,7 @@ function StreamPage() {
       window.visualViewport?.removeEventListener("resize", emit);
       window.removeEventListener("pageshow", emit);
       window.screen?.orientation?.removeEventListener?.("change", emit);
+      window.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [handleRotate]);
 
