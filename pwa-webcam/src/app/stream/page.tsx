@@ -190,7 +190,7 @@ function StreamPage() {
       window.visualViewport?.removeEventListener("resize", emit);
       window.removeEventListener("pageshow", emit);
       window.screen?.orientation?.removeEventListener?.("change", emit);
-      window.removeEventListener("visibilitychange", handleVisibilityChange);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [handleRotate]);
 
