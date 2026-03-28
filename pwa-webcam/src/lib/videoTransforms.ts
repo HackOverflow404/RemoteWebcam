@@ -49,11 +49,16 @@ export function createTransformedTrack(
   let ready = false;
 
   let rot: number = rotation;
-  let rad = rot === 90 ? Math.PI / 2 : rot === -90 ? -Math.PI / 2 : 0;
+  const toRad = (r: number) =>
+    r === 90 ? Math.PI / 2
+    : r === -90 || r === 270 ? -Math.PI / 2
+    : r === 180 ? Math.PI
+    : 0;
+  let rad = toRad(rot);
 
   const setRotation = (r: number) => {
     rot = r;
-    rad = rot === 90 ? Math.PI / 2 : rot === -90 ? -Math.PI / 2 : 0;
+    rad = toRad(rot);
   };
 
   const ensurePlay = () => {
@@ -80,11 +85,14 @@ export function createTransformedTrack(
     const srcW = video.videoWidth || 1;
     const srcH = video.videoHeight || 1;
 
-    const effW = rot === 90 || rot === -90 ? srcH : srcW;
-    const effH = rot === 90 || rot === -90 ? srcW : srcH;
+    const isRotated90 = rot === 90 || rot === -90 || rot === 270;
+    const effW = isRotated90 ? srcH : srcW;
+    const effH = isRotated90 ? srcW : srcH;
 
+    // Recompute fit dynamically so it updates when rotation changes mid-session
+    const currentFit: FitMode = rot === 0 || rot === 180 ? "contain" : "cover";
     const scale =
-      fit === "cover"
+      currentFit === "cover"
         ? Math.max(cw / effW, ch / effH)
         : Math.min(cw / effW, ch / effH);
 

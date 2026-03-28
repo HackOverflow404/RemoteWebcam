@@ -136,13 +136,14 @@ function StreamPage() {
     const normalize = (deg: number) => ((deg % 360) + 360) % 360;
 
     const getAngle = () => {
-      // 1) Modern browsers (Chrome/Android, some iOS contexts)
-      const so = window.screen?.orientation;
-      if (so && typeof so.angle === "number") return so.angle;
-
-      // 2) iOS Safari (most reliable)
+      // 1) iOS Safari legacy API — check first because screen.orientation.angle
+      //    is stuck at 0 on iOS PWA/Safari even when the device is in landscape
       const w = window as unknown as { orientation?: number };
       if (typeof w.orientation === "number") return w.orientation;
+
+      // 2) Modern browsers (Chrome/Android)
+      const so = window.screen?.orientation;
+      if (so && typeof so.angle === "number") return so.angle;
 
       // 3) Fallback heuristic
       return window.innerWidth > window.innerHeight ? 90 : 0;

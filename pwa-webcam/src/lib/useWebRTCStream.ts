@@ -97,7 +97,8 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     if (!isLandscape) return 0;
 
     const type = window.screen?.orientation?.type;
-    if (type === "landscape-secondary") return -90;
+    // Use 270 (not -90) to stay consistent with normalize() in stream page
+    if (type === "landscape-secondary") return 270;
     if (type === "landscape-primary") return 90;
 
     const screenAngle = (window.screen?.orientation?.angle ?? 0) as number;
@@ -107,10 +108,11 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
         : 0;
 
     const angle = screenAngle || legacyAngle || 0;
-    return angle === -90 || angle === 270 ? -90 : 90;
+    // Return 270 (not -90) to match normalize() in stream page which maps -90 → 270
+    return angle === -90 || angle === 270 ? 270 : 90;
   };
 
-  const handleRotate = useCallback(async (rot: number) => {
+  const handleRotate = useCallback((rot: number) => {
     if (rot === rotationRef.current) return;
     rotationRef.current = rot;
 

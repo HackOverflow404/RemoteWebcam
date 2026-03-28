@@ -64,7 +64,6 @@ self.addEventListener("activate", (event) => {
 // Fetch: Caching strategy
 self.addEventListener("fetch", (event) => {
   const req = event.request;
-  return;
   if (req.method !== "GET") return;
 
   console.log("[SW] Fetching:", req.url, "| bypass?", shouldBypassCache(req));
