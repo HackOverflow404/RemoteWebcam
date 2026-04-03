@@ -136,16 +136,28 @@ function StreamPage() {
     const normalize = (deg: number) => ((deg % 360) + 360) % 360;
 
     const getAngle = () => {
-      // 1) iOS Safari legacy API — check first because screen.orientation.angle
-      //    is stuck at 0 on iOS PWA/Safari even when the device is in landscape
-      const w = window as unknown as { orientation?: number };
-      if (typeof w.orientation === "number") return w.orientation;
-
-      // 2) Modern browsers (Chrome/Android)
+      // 1) Modern Screen Orientation API – reliable on iOS 16.4+, Chrome, Android
       const so = window.screen?.orientation;
-      if (so && typeof so.angle === "number") return so.angle;
+      if (so?.type) {
+        switch (so.type) {
+          case "landscape-primary":  return 90;
+          case "landscape-secondary": return 270;
+          case "portrait-secondary": return 180;
+          default: return 0;
+        }
+      }
 
-      // 3) Fallback heuristic
+      // 2) iOS legacy window.orientation – returns -90 / 90 / 180 / 0
+      //    Only trust non-zero; iOS 17+ returns 0 even in landscape (broken).
+      const w = window as unknown as { orientation?: number };
+      if (typeof w.orientation === "number") {
+        if (w.orientation !== 0) return w.orientation;
+        // orientation says 0 — only trust it if viewport also says portrait
+        if (window.innerWidth <= window.innerHeight) return 0;
+        // orientation lied (landscape viewport, 0 reported) — fall through
+      }
+
+      // 3) Aspect-ratio heuristic (can't distinguish 90 from 270 here)
       return window.innerWidth > window.innerHeight ? 90 : 0;
     };
 
@@ -153,11 +165,12 @@ function StreamPage() {
       console.log("Rotation detected");
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
+        // 300 ms gives iOS time to finish rotating the viewport before we read dimensions
         setTimeout(() => {
           const angle = normalize(getAngle());
           setRot(angle);
           handleRotate(angle);
-        }, 50);
+        }, 300);
       });
     };
 
@@ -169,29 +182,35 @@ function StreamPage() {
     emit();
 
     // iOS Safari triggers this reliably
-    window.addEventListener("orientationchange", emit, { passive: true });
+    window.addEventListener(“orientationchange”, emit, { passive: true });
 
     // Also useful because Safari sometimes “resizes” without firing orientationchange
-    window.addEventListener("resize", emit, { passive: true });
+    window.addEventListener(“resize”, emit, { passive: true });
 
     // Best signal for the *visual* viewport on iOS (address bar collapse/expand, etc.)
-    window.visualViewport?.addEventListener("resize", emit, { passive: true });
+    window.visualViewport?.addEventListener(“resize”, emit, { passive: true });
+
+    // matchMedia fires after iOS has finished rotating the layout — more reliable
+    // than orientationchange (which fires before viewport dimensions update)
+    const mqLandscape = window.matchMedia(“(orientation: landscape)”);
+    mqLandscape.addEventListener(“change”, emit);
 
     // Coming back from background often needs a refresh
-    window.addEventListener("pageshow", emit, { passive: true });
-    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener(“pageshow”, emit, { passive: true });
+    document.addEventListener(“visibilitychange”, handleVisibilityChange);
 
     // Use ScreenOrientation event where it exists (harmless on iOS; helpful elsewhere)
-    window.screen?.orientation?.addEventListener?.("change", emit);
+    window.screen?.orientation?.addEventListener?.(“change”, emit);
 
     return () => {
       cancelAnimationFrame(raf);
-      window.removeEventListener("orientationchange", emit);
-      window.removeEventListener("resize", emit);
-      window.visualViewport?.removeEventListener("resize", emit);
-      window.removeEventListener("pageshow", emit);
-      window.screen?.orientation?.removeEventListener?.("change", emit);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener(“orientationchange”, emit);
+      window.removeEventListener(“resize”, emit);
+      window.visualViewport?.removeEventListener(“resize”, emit);
+      mqLandscape.removeEventListener(“change”, emit);
+      window.removeEventListener(“pageshow”, emit);
+      window.screen?.orientation?.removeEventListener?.(“change”, emit);
+      document.removeEventListener(“visibilitychange”, handleVisibilityChange);
     };
   }, [handleRotate]);
 
