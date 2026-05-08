@@ -34,6 +34,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     propsRef.current = initialProps;
   });
 
+  const mountedRef = useRef(true);
   const startedRef = useRef(false);
   const rotationRef = useRef<number>(0);
   const dcRef = useRef<RTCDataChannel | null>(null);
@@ -136,6 +137,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       outDimsRef.current = null;
 
       if (peerRef.current) {
+        peerRef.current.onconnectionstatechange = null;
         try {
           peerRef.current.close();
         } catch {}
@@ -152,6 +154,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       }
 
       cleanupProcessedVideo();
+      sourceVideoTrackRef.current = null;
       stopStatsLogging();
 
       setOn(false);
@@ -163,6 +166,16 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     },
     [cleanupProcessedVideo]
   );
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      void cleanup("unmount");
+    };
+  // cleanup is stable (its deps never change), but omit from deps so this
+  // effect runs only on unmount and never re-registers on re-render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const startStatsLogging = (pc: RTCPeerConnection) => {
     stopStatsLogging(); // ensure only one timer
@@ -254,6 +267,8 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
 
     try {
       const iceServers = await fetchIceServers();
+      if (!mountedRef.current) return;
+
       const pc = new RTCPeerConnection({ iceServers });
       peerRef.current = pc;
 
@@ -332,7 +347,8 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
 
       
       await pc.setLocalDescription(await pc.createOffer());
-      
+      if (!mountedRef.current) return;
+
       startStatsLogging(pc);
 
       await new Promise<void>((resolve) => {
@@ -341,6 +357,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
           if (pc.iceGatheringState === "complete") resolve();
         };
       });
+      if (!mountedRef.current) return;
 
       await fetch("https://submitoffer-qaf2yvcrrq-uc.a.run.app", {
         method: "POST",
@@ -354,6 +371,8 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       // Poll for answer
       let answer: RTCSessionDescriptionInit | null = null;
       while (!answer) {
+        if (!mountedRef.current) return;
+
         const resp = await fetch(
           "https://checkanswer-qaf2yvcrrq-uc.a.run.app",
           {
@@ -368,10 +387,13 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
           answer = data.answer;
         } else {
           await new Promise((r) => setTimeout(r, 1000));
+          if (!mountedRef.current) return;
         }
       }
+      if (!mountedRef.current) return;
 
       await pc.setRemoteDescription(answer);
+      if (!mountedRef.current) return;
       
       try {
         wakeLock.current = await navigator.wakeLock.request('screen');
