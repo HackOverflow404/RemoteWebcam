@@ -148,11 +148,24 @@ class WebRTCWorker(QObject):
         try:
             self.loop.run_forever()
         finally:
-            # ensure __run finishes
+            # Cancel __run if still going
             if not main.done():
                 main.cancel()
                 try:
                     self.loop.run_until_complete(main)
+                except Exception:
+                    pass
+            # Cancel ALL remaining tasks (e.g. aioice TURN send_data coroutines)
+            # and let them finish so the loop can close without "Task was destroyed
+            # but it is pending!" warnings.
+            remaining = [t for t in asyncio.all_tasks(self.loop) if not t.done()]
+            for t in remaining:
+                t.cancel()
+            if remaining:
+                try:
+                    self.loop.run_until_complete(
+                        asyncio.gather(*remaining, return_exceptions=True)
+                    )
                 except Exception:
                     pass
             self.loop.close()
