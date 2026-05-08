@@ -237,6 +237,10 @@ function StreamPage() {
     window.addEventListener("pageshow", emit, { passive: true });
     document.addEventListener("visibilitychange", onVisible);
     window.screen?.orientation?.addEventListener?.("change", emit);
+    // iOS 17+ fallback: videoWidth/videoHeight change when camera physically rotates
+    // even though screen.orientation stays locked to "portrait-primary"
+    const vid = videoRef.current;
+    vid?.addEventListener("resize", emit);
 
     return () => {
       cancelAnimationFrame(raf);
@@ -247,8 +251,13 @@ function StreamPage() {
       window.removeEventListener("pageshow", emit);
       document.removeEventListener("visibilitychange", onVisible);
       window.screen?.orientation?.removeEventListener?.("change", emit);
+      vid?.removeEventListener("resize", emit);
     };
-  }, [handleRotate]);
+  }, [handleRotate, videoRef]);
+
+  useEffect(() => {
+    return () => { stopStream(); };
+  }, [stopStream]);
 
   const handleBack = useCallback(() => {
     stopStream();
