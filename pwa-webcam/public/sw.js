@@ -1,4 +1,4 @@
-const CACHE_NAME = "pixelstreamer-v1";
+const CACHE_NAME = "pixelstreamer-v2";
 const STATIC_ASSETS = [
   "/",
   "/manifest.webmanifest",
