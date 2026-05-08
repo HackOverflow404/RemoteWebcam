@@ -175,85 +175,113 @@ function StreamPage() {
     (screen.orientation as any)?.lock?.("portrait")?.catch?.(() => {});
   }, []);
 
-  // Detect PHYSICAL device rotation for icon animation and WebRTC stream rotation.
-  //
-  // Strategy: check window.orientation FIRST.  On iOS in portrait-locked PWA mode,
-  // screen.orientation.type always reports "portrait-primary" (the locked value),
-  // but window.orientation still reflects the real physical tilt on iOS ≤ 16.
-  // On iOS 17+ in PWA mode neither API reliably gives physical rotation, so icons
-  // won't animate — but the screen is already locked portrait by the manifest so
-  // no layout change is needed anyway.
+  // iOS 13+ requires explicit permission to read DeviceOrientationEvent data.
+  // The API must be called from a user-gesture context, so we hook into the
+  // first touch/click on the page — whichever comes first.
   useEffect(() => {
-    let raf = 0;
+    const request = async () => {
+      const DOE = DeviceOrientationEvent as any;
+      if (typeof DOE.requestPermission === "function") {
+        try { await DOE.requestPermission(); } catch { /* user denied or unavailable */ }
+      }
+    };
+    document.addEventListener("touchstart", request, { once: true, capture: true });
+    document.addEventListener("click",      request, { once: true, capture: true });
+    return () => {
+      document.removeEventListener("touchstart", request, true);
+      document.removeEventListener("click",      request, true);
+    };
+  }, []);
 
+  // Physical rotation detection.
+  //
+  // Primary: DeviceOrientationEvent (gamma axis).  This reads the physical IMU
+  // sensor directly, so it works even in iOS PWA portrait-locked mode where
+  // screen.orientation is always "portrait-primary" and window.orientation is
+  // deprecated.
+  //
+  // Fallback: screen/window orientation APIs — for browser mode and Android,
+  // where screen.orientation.type reflects the actual viewport orientation.
+  // The fallback fires on orientationchange / resize events and is skipped once
+  // DOE has provided real (non-null) data.
+  useEffect(() => {
     const norm = (d: number) => ((d % 360) + 360) % 360;
+    let doeActive = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
+    const commit = (angle: number) => {
+      const n = norm(angle);
+      if (timer) clearTimeout(timer);
+      // 300 ms lets iOS settle after the physical rotation before committing
+      timer = setTimeout(() => {
+        timer = null;
+        if (n !== rotRef.current) {
+          rotRef.current = n;
+          setRot(n);
+          handleRotate(n);
+        }
+      }, 300);
+    };
+
+    // gamma: left-right tilt. +90 = right side down (CW landscape).
+    //                         -90 = left side down  (CCW landscape).
+    // beta:  front-back tilt. positive when top tilts away from user.
+    //        Negative when phone is upside-down relative to portrait upright.
+    const onDOE = (e: DeviceOrientationEvent) => {
+      if (e.gamma === null) return; // no permission yet, or not supported
+      doeActive = true;
+      const g = e.gamma;
+      const b = e.beta ?? 0;
+      commit(g > 45 ? 90 : g < -45 ? 270 : b < -20 ? 180 : 0);
+    };
+
+    // Fallback for browser mode and Android (screen/window orientation APIs).
     const getAngle = (): number => {
       const w = window as any;
       if (typeof w.orientation === "number") {
         const o = w.orientation as number;
-        if (o !== 0) return norm(o); // 90, −90 → 270, 180
-        // orientation says 0 — only trust it when the viewport also looks portrait
+        if (o !== 0) return norm(o);
         if (window.innerWidth <= window.innerHeight) return 0;
-        // viewport is landscape but window.orientation lied — fall through
       }
-      // Screen Orientation API: reliable on Android / Chrome / non-locked iOS
       const so = window.screen?.orientation;
       if (so?.type) {
-        switch (so.type) {
-          case "landscape-primary":   return 90;
-          case "landscape-secondary": return 270;
-          case "portrait-secondary":  return 180;
-          default:                    return 0;
-        }
+        if (so.type === "landscape-primary")   return 90;
+        if (so.type === "landscape-secondary") return 270;
+        if (so.type === "portrait-secondary")  return 180;
+        return 0;
       }
-      // Aspect-ratio heuristic (can't distinguish 90° from 270°)
       return window.innerWidth > window.innerHeight ? 90 : 0;
     };
 
-    const emit = () => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => {
-        // 300 ms lets iOS finish updating the viewport after rotation
-        setTimeout(() => {
-          const angle = norm(getAngle());
-          if (angle !== rotRef.current) {
-            rotRef.current = angle;
-            setRot(angle);
-            handleRotate(angle);
-          }
-        }, 300);
-      });
+    const onScreenChange = () => {
+      if (doeActive) return; // DOE is already handling it
+      commit(getAngle());
     };
 
-    const onVisible = () => { if (!document.hidden) emit(); };
+    const onVisible = () => { if (!document.hidden) onScreenChange(); };
 
-    emit();
-    window.addEventListener("orientationchange", emit, { passive: true });
-    window.addEventListener("resize", emit, { passive: true });
-    window.visualViewport?.addEventListener("resize", emit, { passive: true });
-    const mq = window.matchMedia("(orientation: landscape)");
-    mq.addEventListener("change", emit);
-    window.addEventListener("pageshow", emit, { passive: true });
-    document.addEventListener("visibilitychange", onVisible);
-    window.screen?.orientation?.addEventListener?.("change", emit);
-    // iOS 17+ fallback: videoWidth/videoHeight change when camera physically rotates
-    // even though screen.orientation stays locked to "portrait-primary"
+    commit(getAngle()); // seed on mount for browser mode
+
     const vid = videoRef.current;
-    vid?.addEventListener("resize", emit);
+    window.addEventListener("deviceorientation",  onDOE,          { passive: true });
+    window.addEventListener("orientationchange",  onScreenChange, { passive: true });
+    window.addEventListener("resize",             onScreenChange, { passive: true });
+    window.addEventListener("pageshow",           onScreenChange, { passive: true });
+    window.screen?.orientation?.addEventListener?.("change", onScreenChange);
+    document.addEventListener("visibilitychange", onVisible);
+    vid?.addEventListener("resize", onScreenChange); // camera dim change on some devices
 
     return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener("orientationchange", emit);
-      window.removeEventListener("resize", emit);
-      window.visualViewport?.removeEventListener("resize", emit);
-      mq.removeEventListener("change", emit);
-      window.removeEventListener("pageshow", emit);
+      if (timer) clearTimeout(timer);
+      window.removeEventListener("deviceorientation",  onDOE);
+      window.removeEventListener("orientationchange",  onScreenChange);
+      window.removeEventListener("resize",             onScreenChange);
+      window.removeEventListener("pageshow",           onScreenChange);
+      window.screen?.orientation?.removeEventListener?.("change", onScreenChange);
       document.removeEventListener("visibilitychange", onVisible);
-      window.screen?.orientation?.removeEventListener?.("change", emit);
-      vid?.removeEventListener("resize", emit);
+      vid?.removeEventListener("resize", onScreenChange);
     };
-  }, [handleRotate, videoRef]);
+  }, [handleRotate]);
 
   useEffect(() => {
     return () => { stopStream(); };
