@@ -35,10 +35,20 @@ class VirtualCamThread(threading.Thread):
         try:
             last = np.zeros((self.height, self.width, 3), dtype=np.uint8)
 
-            with pyvirtualcam.Camera(
-                width=self.width, height=self.height, fps=self.fps,
-                fmt=pyvirtualcam.PixelFormat.BGR, print_fps=False
-            ) as self.cam:
+            try:
+                cam_ctx = pyvirtualcam.Camera(
+                    width=self.width, height=self.height, fps=self.fps,
+                    fmt=pyvirtualcam.PixelFormat.BGR, print_fps=False,
+                )
+            except RuntimeError as e:
+                print(
+                    "[VirtualCam] ERROR: Could not open virtual camera.\n"
+                    "  Make sure v4l2loopback is loaded:  sudo modprobe v4l2loopback\n"
+                    f"  Details: {e}"
+                )
+                return
+
+            with cam_ctx as self.cam:
                 while self.running_flag():
                     try:
                         while True:
@@ -50,6 +60,8 @@ class VirtualCamThread(threading.Thread):
                     self.cam.send(frame)
                     self.cam.sleep_until_next_frame()
 
+        except Exception as e:
+            print(f"[VirtualCam] Unexpected error: {e}")
         finally:
             print("[VirtualCam] Closed")
 

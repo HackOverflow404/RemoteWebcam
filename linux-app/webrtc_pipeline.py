@@ -144,20 +144,36 @@ class WebRTCWorker(QObject):
     def _run_async_thread(self):
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
+
+        # Suppress "Task exception was never retrieved" spam from aioice's
+        # internal TURN channel-bind tasks (TransactionFailed is expected when
+        # TURN credentials expire or a relay path fails mid-session).
+        def _quiet_exception_handler(loop, context):
+            exc = context.get("exception")
+            msg = context.get("message", "")
+            # Swallow known-noisy aioice / STUN errors
+            if "TransactionFailed" in type(exc).__name__ if exc else "":
+                return
+            if "Task was destroyed but it is pending" in msg:
+                return
+            # Log everything else through the default handler
+            loop.default_exception_handler(context)
+
+        self.loop.set_exception_handler(_quiet_exception_handler)
         main = self.loop.create_task(self.__run())
         try:
             self.loop.run_forever()
         finally:
-            # Cancel __run if still going
+            # Cancel __run if still going.
+            # CancelledError is BaseException (not Exception) in Python 3.8+,
+            # so we must catch BaseException here or it propagates uncaught.
             if not main.done():
                 main.cancel()
                 try:
                     self.loop.run_until_complete(main)
-                except Exception:
+                except BaseException:
                     pass
-            # Cancel ALL remaining tasks (e.g. aioice TURN send_data coroutines)
-            # and let them finish so the loop can close without "Task was destroyed
-            # but it is pending!" warnings.
+            # Cancel ALL remaining tasks (e.g. aioice TURN send_data coroutines).
             remaining = [t for t in asyncio.all_tasks(self.loop) if not t.done()]
             for t in remaining:
                 t.cancel()
@@ -166,7 +182,7 @@ class WebRTCWorker(QObject):
                     self.loop.run_until_complete(
                         asyncio.gather(*remaining, return_exceptions=True)
                     )
-                except Exception:
+                except BaseException:
                     pass
             self.loop.close()
 
@@ -259,118 +275,126 @@ class WebRTCWorker(QObject):
         self.loop = asyncio.get_running_loop()
         self._shutdown_lock = asyncio.Lock()
 
-        print("Waiting for JS offer…")
-        offer_json = await asyncio.to_thread(self.__poll_for_offer, self.code)
-        if not offer_json:
-            self.connection_state_changed.emit(ConnectionState.FAILED)
-            await self.__handle_shutdown()
-            return
-        if not self.running:
-            return
-
-        self.connection_state_changed.emit(ConnectionState.CONNECTING)
-
-        offer = RTCSessionDescription(
-            sdp=offer_json["sdp"],
-            type=offer_json["type"],
-        )
-        print("Got JS offer")
-
+        # Wrap the entire coroutine so that CancelledError raised by any await
+        # (including asyncio.to_thread) is handled gracefully instead of
+        # propagating as an unhandled exception in the thread's finally block.
         try:
-            config = self.__get_ice_configuration()
-        except Exception as e:
-            print("[WebRTC] ICE config failed:", repr(e))
-            self.connection_state_changed.emit(ConnectionState.FAILED)
-            await self.__handle_shutdown()
-            return
-        self.pc = RTCPeerConnection(configuration=config)
-
-        self.pc.addTransceiver("video", direction="recvonly")
-        self.pc.addTransceiver("audio", direction="recvonly")
-
-        @self.pc.on("connectionstatechange")
-        async def on_connectionstatechange():
-            state = self.pc.connectionState
-            print(f"[WebRTC] State: {state}")
-
-            if state == "connected":
-                self.connection_state_changed.emit(ConnectionState.CONNECTED)
-            elif state == "failed":
+            print("Waiting for JS offer…")
+            offer_json = await asyncio.to_thread(self.__poll_for_offer, self.code)
+            if not offer_json:
                 self.connection_state_changed.emit(ConnectionState.FAILED)
-            
-            if state in ("failed", "closed", "disconnected"):
-                self.running = False
-                asyncio.create_task(self.__handle_shutdown())
+                await self.__handle_shutdown()
+                return
+            if not self.running:
+                return
 
-        @self.pc.on("track")
-        async def on_track(track):
-            if track.kind == "video":
-                print("[WebRTC] Video track received")
-                self.video_track_task = asyncio.create_task(
-                    self.__handle_video_track(track)
-                )
+            self.connection_state_changed.emit(ConnectionState.CONNECTING)
 
-                self.video_track_received = True
-            elif track.kind == "audio":
-                print("[WebRTC] Audio track received")
-                self.audio_track_task = asyncio.create_task(
-                    self.__handle_audio_track(track)
-                )
+            offer = RTCSessionDescription(
+                sdp=offer_json["sdp"],
+                type=offer_json["type"],
+            )
+            print("Got JS offer")
 
-        @self.pc.on("datachannel")
-        def on_datachannel(channel):
-            self.data_channels.add(channel)
+            try:
+                config = self.__get_ice_configuration()
+            except Exception as e:
+                print("[WebRTC] ICE config failed:", repr(e))
+                self.connection_state_changed.emit(ConnectionState.FAILED)
+                await self.__handle_shutdown()
+                return
+            self.pc = RTCPeerConnection(configuration=config)
 
-            @channel.on("open")
-            def on_open(*args):
-                channel.send('{"type":"hello","source":"linux"}')
+            self.pc.addTransceiver("video", direction="recvonly")
+            self.pc.addTransceiver("audio", direction="recvonly")
 
-            @channel.on("message")
-            async def on_message(msg):
-                print(msg)
-                try:
-                    data = msg if isinstance(msg, dict) else json.loads(msg)
-                except Exception:
-                    return
+            @self.pc.on("connectionstatechange")
+            async def on_connectionstatechange():
+                state = self.pc.connectionState
+                print(f"[WebRTC] State: {state}")
 
-                if data.get("type") == "toggle":
-                    await self.__handleToggle(data)
-                if data.get("type") == "terminate":
-                    await self.__handle_shutdown()
-                if data.get("type") == "dimensions":
-                    self.VIRTUAL_CAM_WIDTH = data.get("width")
-                    self.VIRTUAL_CAM_HEIGHT = data.get("height")
-                    if self.video_frame_received:
-                        if not self.virtual_cam_thread:
-                            self.virtual_cam_thread = VirtualCamThread(
-                                frame_queue=self.video_queue,
-                                running_flag=lambda: self.running,
-                                width=self.VIRTUAL_CAM_WIDTH,
-                                height=self.VIRTUAL_CAM_HEIGHT,
-                                fps=60,
-                            )
-                            self.virtual_cam_thread.start()
+                if state == "connected":
+                    self.connection_state_changed.emit(ConnectionState.CONNECTED)
+                elif state == "failed":
+                    self.connection_state_changed.emit(ConnectionState.FAILED)
 
-        await self.pc.setRemoteDescription(offer)
-        answer = await self.pc.createAnswer()
-        await self.pc.setLocalDescription(answer)
+                if state in ("failed", "closed", "disconnected"):
+                    self.running = False
+                    asyncio.create_task(self.__handle_shutdown())
 
-        await asyncio.to_thread(
-            requests.post,
-            self.SUBMIT_ANSWER_URL,
-            json={
-                "code": self.code,
-                "answer": {
-                    "sdp": self.pc.localDescription.sdp,
-                    "type": self.pc.localDescription.type,
+            @self.pc.on("track")
+            async def on_track(track):
+                if track.kind == "video":
+                    print("[WebRTC] Video track received")
+                    self.video_track_task = asyncio.create_task(
+                        self.__handle_video_track(track)
+                    )
+                    self.video_track_received = True
+                elif track.kind == "audio":
+                    print("[WebRTC] Audio track received")
+                    self.audio_track_task = asyncio.create_task(
+                        self.__handle_audio_track(track)
+                    )
+
+            @self.pc.on("datachannel")
+            def on_datachannel(channel):
+                self.data_channels.add(channel)
+
+                @channel.on("open")
+                def on_open(*args):
+                    channel.send('{"type":"hello","source":"linux"}')
+
+                @channel.on("message")
+                async def on_message(msg):
+                    print(msg)
+                    try:
+                        data = msg if isinstance(msg, dict) else json.loads(msg)
+                    except Exception:
+                        return
+
+                    if data.get("type") == "toggle":
+                        await self.__handleToggle(data)
+                    if data.get("type") == "terminate":
+                        await self.__handle_shutdown()
+                    if data.get("type") == "dimensions":
+                        self.VIRTUAL_CAM_WIDTH = data.get("width")
+                        self.VIRTUAL_CAM_HEIGHT = data.get("height")
+                        if self.video_frame_received:
+                            if not self.virtual_cam_thread:
+                                self.virtual_cam_thread = VirtualCamThread(
+                                    frame_queue=self.video_queue,
+                                    running_flag=lambda: self.running,
+                                    width=self.VIRTUAL_CAM_WIDTH,
+                                    height=self.VIRTUAL_CAM_HEIGHT,
+                                    fps=60,
+                                )
+                                self.virtual_cam_thread.start()
+
+            await self.pc.setRemoteDescription(offer)
+            answer = await self.pc.createAnswer()
+            await self.pc.setLocalDescription(answer)
+
+            await asyncio.to_thread(
+                requests.post,
+                self.SUBMIT_ANSWER_URL,
+                json={
+                    "code": self.code,
+                    "answer": {
+                        "sdp": self.pc.localDescription.sdp,
+                        "type": self.pc.localDescription.type,
+                    },
                 },
-            },
-            timeout=5
-        )
+                timeout=5
+            )
 
-        try:
             while self.running:
                 await asyncio.sleep(1)
+
+        except asyncio.CancelledError:
+            pass  # Normal shutdown path — _run_async_thread handles loop cleanup
+        except Exception as e:
+            print(f"[WebRTC] __run error: {repr(e)}")
+            self.connection_state_changed.emit(ConnectionState.FAILED)
         finally:
             await self.__handle_shutdown()
             try:

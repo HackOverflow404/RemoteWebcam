@@ -76,12 +76,16 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       // Never mirror the outgoing stream — only the local preview is mirrored
       // (via CSS scaleX on the video element). The virtual webcam on Linux
       // should show the un-mirrored feed, matching how a real webcam behaves.
-      return createTransformedTrack(track, {
+      const processed = createTransformedTrack(track, {
         outW: w,
         outH: h,
         fps,
         background: "black",
       });
+      // Sync the canvas to the current physical rotation immediately so the
+      // very first frame is already correctly oriented.
+      processed.setRotation(rotationRef.current);
+      return processed;
     },
     [lockOutputDimsOnce]
   );
@@ -93,11 +97,12 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     }
   }, []);
 
-  // Track physical rotation angle (set by the gyro in stream/page.tsx).
-  // Used here only to expose the ref for potential future use; the canvas
-  // transform is always contain-fit and does not depend on this value.
+  // Called by the gyro detector in stream/page.tsx whenever the physical
+  // device angle changes. Updates the canvas correction in real-time so
+  // the stream stays correctly oriented without renegotiating WebRTC.
   const handleRotate = useCallback((rot: number) => {
     rotationRef.current = rot;
+    processedVideoRef.current?.setRotation(rot);
   }, []);
 
   const cleanup = useCallback(
