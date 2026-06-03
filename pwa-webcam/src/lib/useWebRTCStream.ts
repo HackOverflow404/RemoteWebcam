@@ -11,6 +11,17 @@ export type ConnectionState =
   | "error";
 export type MediaState = "on" | "off" | "error";
 
+// Keep output dimensions constant for the entire session so WebRTC never
+// needs to renegotiate when the phone rotates. The canvas handles fitting.
+const getOutputDims = (resolution: string) => {
+  switch (resolution) {
+    case "4k": return { w: 3840, h: 2160 };
+    case "hd": return { w: 1280, h: 720 };
+    case "sd": return { w: 640, h: 480 };
+  }
+  return { w: 1280, h: 720 };
+};
+
 export interface UseWebRTCStreamProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   media: MediaStream | null;
@@ -53,33 +64,22 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
 
   const lockOutputDimsOnce = useCallback(() => {
     if (outDimsRef.current) return outDimsRef.current;
-
     const { resolution } = propsRef.current;
-    const dims =
-      resolution === "4k"
-        ? { w: 3840, h: 2160 }
-        : resolution === "sd"
-        ? { w: 640, h: 480 }
-        : { w: 1280, h: 720 };
-
-    outDimsRef.current = dims;
-    return dims;
+    outDimsRef.current = getOutputDims(resolution);
+    return outDimsRef.current;
   }, []);
 
   const buildProcessed = useCallback(
-    (track: MediaStreamTrack, rot: number) => {
-      const { fps, isFrontCamera } = propsRef.current;
+    (track: MediaStreamTrack) => {
+      const { fps } = propsRef.current;
       const { w, h } = lockOutputDimsOnce();
-
-      const fit = rot === 0 ? "contain" : "cover";
-
+      // Never mirror the outgoing stream — only the local preview is mirrored
+      // (via CSS scaleX on the video element). The virtual webcam on Linux
+      // should show the un-mirrored feed, matching how a real webcam behaves.
       return createTransformedTrack(track, {
         outW: w,
         outH: h,
         fps,
-        mirror: isFrontCamera,
-        rotation: rot,
-        fit,
         background: "black",
       });
     },
@@ -93,31 +93,11 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     }
   }, []);
 
-  const computeRotation = (w: number, h: number): number => {
-    const isLandscape = w > h;
-    if (!isLandscape) return 0;
-
-    const type = window.screen?.orientation?.type;
-    // Use 270 (not -90) to stay consistent with normalize() in stream page
-    if (type === "landscape-secondary") return 270;
-    if (type === "landscape-primary") return 90;
-
-    const screenAngle = (window.screen?.orientation?.angle ?? 0) as number;
-    const legacyAngle =
-      typeof (window as any).orientation === "number"
-        ? (window as any).orientation
-        : 0;
-
-    const angle = screenAngle || legacyAngle || 0;
-    // Return 270 (not -90) to match normalize() in stream page which maps -90 → 270
-    return angle === -90 || angle === 270 ? 270 : 90;
-  };
-
+  // Track physical rotation angle (set by the gyro in stream/page.tsx).
+  // Used here only to expose the ref for potential future use; the canvas
+  // transform is always contain-fit and does not depend on this value.
   const handleRotate = useCallback((rot: number) => {
-    if (rot === rotationRef.current) return;
     rotationRef.current = rot;
-
-    processedVideoRef.current?.setRotation(rot);
   }, []);
 
   const cleanup = useCallback(
@@ -202,19 +182,6 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       statsTimerRef.current = null;
     }
   };
-
-  const getOutputDims = (resolution: string) =>  {
-    // Keep output constant so WebRTC never renegotiates on rotation.
-    switch (resolution) {
-      case "4k":
-        return { w: 3840, h: 2160 };
-      case "hd":
-        return { w: 1280, h: 720 };
-      case "sd":
-        return { w: 640, h: 480 };
-    }
-    return { w: 1280, h: 720 }; // hd default
-  }
 
   const relayToggle = (trigger: "mic" | "cam" | "media", state: MediaState) => {
     if (dcRef.current) {
@@ -332,11 +299,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
           sourceVideoTrackRef.current = track;
           cleanupProcessedVideo();
 
-          const w = window.visualViewport?.width ?? window.innerWidth;
-          const h = window.visualViewport?.height ?? window.innerHeight;
-          rotationRef.current = computeRotation(Math.round(w), Math.round(h));
-
-          const processed = buildProcessed(track, rotationRef.current);
+          const processed = buildProcessed(track);
           processedVideoRef.current = processed;
 
           pc.addTrack(processed.track, new MediaStream([processed.track]));
@@ -436,7 +399,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
 
         sourceVideoTrackRef.current = track;
 
-        const processed = buildProcessed(track, rotationRef.current);
+        const processed = buildProcessed(track);
         processedVideoRef.current = processed;
 
         await sender.replaceTrack(processed.track);

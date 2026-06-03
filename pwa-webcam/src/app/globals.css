@@ -61,9 +61,10 @@ body {
   inset: 0;
 }
 
-/* Stream page container — stays portrait even when the browser viewport rotates.
-   The @media rule fires synchronously (no JS delay), so the layout never snaps
-   to landscape. JS then rotates individual icons inside so they appear upright. */
+/* Stream page container — always fills the full viewport.
+   The screen is kept portrait via manifest orientation lock (PWA) and
+   screen.orientation.lock() (Chrome/Android). Individual UI icons rotate
+   via JS so they appear upright regardless of physical device tilt. */
 .stream-section {
   position: fixed;
   top: 0;
@@ -72,20 +73,4 @@ body {
   left: 0;
   overflow: hidden;
   background: black;
-}
-
-@media (orientation: landscape) {
-  .stream-section {
-    /* Size the container to portrait dimensions using the landscape viewport axes */
-    width: 100svh;   /* svh in landscape = the short side ≈ portrait width  */
-    height: 100svw;  /* svw in landscape = the long  side ≈ portrait height */
-    /* Centre the portrait block inside the landscape viewport */
-    top: calc((100svh - 100svw) / 2);
-    left: calc((100svw - 100svh) / 2);
-    right: auto;
-    bottom: auto;
-    /* Rotate back to upright — combined with the sizing this keeps the UI portrait */
-    transform: rotate(-90deg);
-    transform-origin: center center;
-  }
 }
