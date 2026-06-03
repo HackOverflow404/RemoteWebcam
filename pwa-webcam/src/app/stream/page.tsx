@@ -52,9 +52,10 @@ const connIcons: Record<ConnectionState, IconType> = {
   error: MdWarning,
 };
 
-// Renders an icon with a CSS rotation that animates smoothly.
-// Applied to individual icons (not the whole layout) so the controls
-// appear upright to the user regardless of how the phone is held.
+// Renders an icon that counter-rotates smoothly to appear upright when the
+// phone is physically tilted. Only the icon rotates — the layout stays fixed.
+// `rot` is the physical device angle (0/90/180/270°); the icon rotates the
+// same amount so it appears upright to someone holding the tilted phone.
 function RotIcon({
   icon: Ic,
   size,
@@ -72,8 +73,9 @@ function RotIcon({
       color={color}
       style={{
         transform: `rotate(${rot}deg)`,
-        transition: "transform 0.3s ease",
+        transition: "transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)",
         display: "inline-block",
+        willChange: "transform",
       }}
     />
   );
@@ -97,12 +99,12 @@ function StreamPage() {
   const exposure = 0;
 
   // rot = detected PHYSICAL rotation angle (0 / 90 / 180 / 270).
-  // Used only for icon animation and WebRTC stream orientation.
-  // Layout counter-rotation is handled by CSS (.stream-section @media landscape).
+  // Used ONLY to rotate individual UI icons so they appear upright when the
+  // phone is tilted. The camera preview and layout are never rotated.
   const [rot, setRot] = useState(0);
   const rotRef = useRef(0);
 
-  const handleRemoteTermination = useCallback(() => {
+  const handleRemoteTermination = useCallback((_: boolean) => {
     setTimeout(() => router.push("/"), 1500);
   }, [router]);
 
@@ -169,10 +171,15 @@ function StreamPage() {
     if (connectionStatus === "disconnected" && isStreamOn) stopMedia();
   }, [connectionStatus]);
 
-  // Attempt API-level portrait lock for browsers that support it (Chrome/Android).
-  // On iOS this throws and is silently ignored; the manifest + CSS @media handle iOS.
+  // Lock the screen to portrait where the API is supported (Chrome/Android PWA).
+  // On iOS the manifest orientation: "portrait" provides the lock; the API call
+  // throws and is silently swallowed. Either way, the physical-rotation gyro
+  // still detects tilt and rotates individual icons independently.
   useEffect(() => {
-    (screen.orientation as any)?.lock?.("portrait")?.catch?.(() => {});
+    (screen.orientation as any)?.lock?.("portrait-primary")?.catch?.(() => {});
+    return () => {
+      (screen.orientation as any)?.unlock?.();
+    };
   }, []);
 
   // iOS 13+ requires explicit permission to read DeviceOrientationEvent data.
@@ -193,32 +200,45 @@ function StreamPage() {
     };
   }, []);
 
-  // Physical rotation detection.
+  // Physical rotation detection — drives icon counter-rotation only.
   //
-  // Primary: DeviceOrientationEvent (gamma axis).  This reads the physical IMU
-  // sensor directly, so it works even in iOS PWA portrait-locked mode where
-  // screen.orientation is always "portrait-primary" and window.orientation is
-  // deprecated.
+  // Primary path: DeviceOrientationEvent (gamma / beta axes from the IMU).
+  // This reads the physical sensor directly and works in iOS PWA mode where
+  // screen.orientation is always "portrait-primary" and never changes.
   //
-  // Fallback: screen/window orientation APIs — for browser mode and Android,
-  // where screen.orientation.type reflects the actual viewport orientation.
-  // The fallback fires on orientationchange / resize events and is skipped once
-  // DOE has provided real (non-null) data.
+  // Fallback path: screen / window orientation APIs, used in browser mode on
+  // Android where the viewport actually rotates. Skipped once the IMU fires.
+  //
+  // Hysteresis: we use a ±55° threshold to enter a new bucket but only leave
+  // it once the angle crosses back past ±35°. This prevents the icon from
+  // flickering when the phone rests near the 45° boundary.
   useEffect(() => {
     const norm = (d: number) => ((d % 360) + 360) % 360;
     let doeActive = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    // pendingAngle tracks the last angle bucket we scheduled a commit for.
-    // This prevents the 60Hz DOE stream from endlessly resetting the debounce
-    // timer — we only reschedule when the discrete bucket (0/90/180/270) changes.
     let pendingAngle = rotRef.current;
+
+    // Classify the raw gamma/beta into a 90° bucket with hysteresis.
+    // currentBucket is the last committed angle so we can apply the dead-zone.
+    const classifyDOE = (g: number, b: number, current: number): number => {
+      const abs = Math.abs(g);
+      // In an established landscape bucket, only leave at <35° (dead zone)
+      if (current === 90  && g > 0  && abs > 35) return 90;
+      if (current === 270 && g < 0  && abs > 35) return 270;
+      if (current === 180 && b < 0  && b > -55)  return 180;
+      // Enter a new bucket with a 55° threshold for stability
+      if (g >  55) return 90;
+      if (g < -55) return 270;
+      if (b < -55) return 180;
+      return 0;
+    };
 
     const commit = (angle: number) => {
       const n = norm(angle);
-      if (n === pendingAngle) return; // bucket unchanged — leave existing timer alone
+      if (n === pendingAngle) return;
       pendingAngle = n;
       if (timer) clearTimeout(timer);
-      // 300 ms lets iOS settle after the physical rotation before committing
+      // 250 ms debounce — long enough for iOS to settle, short enough to feel crisp
       timer = setTimeout(() => {
         timer = null;
         if (n !== rotRef.current) {
@@ -226,21 +246,16 @@ function StreamPage() {
           setRot(n);
           handleRotate(n);
         }
-      }, 300);
+      }, 250);
     };
 
-    // gamma: left-right tilt. +90 = right side down (CW landscape = 90°).
-    //                         -90 = left side down  (CCW landscape = 270°).
-    // beta:  front-back tilt. Negative = top of phone toward user = upside-down.
     const onDOE = (e: DeviceOrientationEvent) => {
-      if (e.gamma === null) return; // no permission yet, or not supported
+      if (e.gamma === null) return;
       doeActive = true;
-      const g = e.gamma;
-      const b = e.beta ?? 0;
-      commit(g > 45 ? 90 : g < -45 ? 270 : b < -20 ? 180 : 0);
+      commit(classifyDOE(e.gamma, e.beta ?? 0, rotRef.current));
     };
 
-    // Fallback for browser mode and Android (screen/window orientation APIs).
+    // Fallback: screen/window APIs for browser mode and Android.
     const getAngle = (): number => {
       const w = window as any;
       if (typeof w.orientation === "number") {
@@ -258,14 +273,10 @@ function StreamPage() {
       return window.innerWidth > window.innerHeight ? 90 : 0;
     };
 
-    const onScreenChange = () => {
-      if (doeActive) return; // DOE is already handling it
-      commit(getAngle());
-    };
-
+    const onScreenChange = () => { if (!doeActive) commit(getAngle()); };
     const onVisible = () => { if (!document.hidden) onScreenChange(); };
 
-    commit(getAngle()); // seed on mount for browser mode
+    commit(getAngle()); // seed from screen API on mount
 
     const vid = videoRef.current;
     window.addEventListener("deviceorientation",  onDOE,          { passive: true });
@@ -274,7 +285,7 @@ function StreamPage() {
     window.addEventListener("pageshow",           onScreenChange, { passive: true });
     window.screen?.orientation?.addEventListener?.("change", onScreenChange);
     document.addEventListener("visibilitychange", onVisible);
-    vid?.addEventListener("resize", onScreenChange); // camera dim change on some devices
+    vid?.addEventListener("resize", onScreenChange);
 
     return () => {
       if (timer) clearTimeout(timer);
@@ -392,8 +403,9 @@ function StreamPage() {
               color={connectionColor}
               style={{
                 transform: `rotate(${rot}deg)`,
-                transition: "transform 0.3s ease",
+                transition: "transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)",
                 display: "inline-block",
+                willChange: "transform",
               }}
             />
             <span className="text-xs font-medium capitalize hidden sm:block">

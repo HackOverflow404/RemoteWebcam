@@ -17,6 +17,20 @@ class VirtualCamThread(threading.Thread):
         self.running_flag = running_flag
         self.width, self.height, self.fps = width, height, fps
 
+    def _letterbox(self, frame: np.ndarray) -> np.ndarray:
+        """Fit frame into (self.height, self.width) preserving aspect ratio."""
+        fh, fw = frame.shape[:2]
+        if fw == self.width and fh == self.height:
+            return frame
+        scale = min(self.width / fw, self.height / fh)
+        nw, nh = int(fw * scale), int(fh * scale)
+        resized = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_LINEAR)
+        out = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+        y0 = (self.height - nh) // 2
+        x0 = (self.width  - nw) // 2
+        out[y0:y0 + nh, x0:x0 + nw] = resized
+        return out
+
     def run(self):
         try:
             last = np.zeros((self.height, self.width, 3), dtype=np.uint8)
@@ -32,9 +46,8 @@ class VirtualCamThread(threading.Thread):
                     except queue.Empty:
                         pass
 
-                    if last.shape[1] != self.width or last.shape[0] != self.height:
-                        last = cv2.resize(last, (self.width, self.height), interpolation=cv2.INTER_LINEAR)
-                    self.cam.send(last)
+                    frame = self._letterbox(last)
+                    self.cam.send(frame)
                     self.cam.sleep_until_next_frame()
 
         finally:
