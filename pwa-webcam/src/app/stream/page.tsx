@@ -208,9 +208,15 @@ function StreamPage() {
     const norm = (d: number) => ((d % 360) + 360) % 360;
     let doeActive = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    // pendingAngle tracks the last angle bucket we scheduled a commit for.
+    // This prevents the 60Hz DOE stream from endlessly resetting the debounce
+    // timer — we only reschedule when the discrete bucket (0/90/180/270) changes.
+    let pendingAngle = rotRef.current;
 
     const commit = (angle: number) => {
       const n = norm(angle);
+      if (n === pendingAngle) return; // bucket unchanged — leave existing timer alone
+      pendingAngle = n;
       if (timer) clearTimeout(timer);
       // 300 ms lets iOS settle after the physical rotation before committing
       timer = setTimeout(() => {
@@ -223,10 +229,9 @@ function StreamPage() {
       }, 300);
     };
 
-    // gamma: left-right tilt. +90 = right side down (CW landscape).
-    //                         -90 = left side down  (CCW landscape).
-    // beta:  front-back tilt. positive when top tilts away from user.
-    //        Negative when phone is upside-down relative to portrait upright.
+    // gamma: left-right tilt. +90 = right side down (CW landscape = 90°).
+    //                         -90 = left side down  (CCW landscape = 270°).
+    // beta:  front-back tilt. Negative = top of phone toward user = upside-down.
     const onDOE = (e: DeviceOrientationEvent) => {
       if (e.gamma === null) return; // no permission yet, or not supported
       doeActive = true;
