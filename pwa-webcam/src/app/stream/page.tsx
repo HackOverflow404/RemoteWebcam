@@ -98,11 +98,26 @@ function StreamPage() {
   const resolution = "hd";
   const exposure = 0;
 
-  // rot = detected PHYSICAL rotation angle (0 / 90 / 180 / 270).
-  // Used ONLY to rotate individual UI icons so they appear upright when the
-  // phone is tilted. The camera preview and layout are never rotated.
+  // rot = physical device angle (0/90/180/270) from the IMU gyro.
   const [rot, setRot] = useState(0);
   const rotRef = useRef(0);
+
+  // Whether the CSS landscape @media rule is currently active.
+  // When true, .stream-section is rotated −90° by CSS, so every icon needs
+  // an extra +90° to compensate and appear upright to the tilted user.
+  // In PWA portrait-locked mode this is always false (media query never fires).
+  const [isViewportLandscape, setIsViewportLandscape] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(orientation: landscape)");
+    const handler = () => setIsViewportLandscape(mq.matches);
+    handler();
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+
+  // Effective icon rotation: compensate for the CSS section counter-rotation
+  // so icons always appear upright from the user's perspective.
+  const iconRot = isViewportLandscape ? rot + 90 : rot;
 
   const handleRemoteTermination = useCallback((_: boolean) => {
     setTimeout(() => router.push("/"), 1500);
@@ -384,7 +399,7 @@ function StreamPage() {
             className="p-2 rounded-full active:bg-white/10 transition-colors"
             aria-label="Return"
           >
-            <RotIcon icon={MdKeyboardReturn} size={28} rot={rot} />
+            <RotIcon icon={MdKeyboardReturn} size={28} rot={iconRot} />
           </button>
 
           {code && (
@@ -402,7 +417,7 @@ function StreamPage() {
               size={24}
               color={connectionColor}
               style={{
-                transform: `rotate(${rot}deg)`,
+                transform: `rotate(${iconRot}deg)`,
                 transition: "transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)",
                 display: "inline-block",
                 willChange: "transform",
@@ -448,7 +463,7 @@ function StreamPage() {
                 icon={MicIcon}
                 size={36}
                 color={isMicOn === "error" ? "#ef4444" : "white"}
-                rot={rot}
+                rot={iconRot}
               />
             </button>
 
@@ -478,7 +493,7 @@ function StreamPage() {
                     ? "#eab308"
                     : "#22c55e"
                 }
-                rot={rot}
+                rot={iconRot}
               />
             </button>
 
@@ -495,7 +510,7 @@ function StreamPage() {
                 icon={VidIcon}
                 size={36}
                 color={isVidOn === "error" ? "#ef4444" : "white"}
-                rot={rot}
+                rot={iconRot}
               />
             </button>
           </div>

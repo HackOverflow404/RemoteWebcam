@@ -61,10 +61,11 @@ body {
   inset: 0;
 }
 
-/* Stream page container — always fills the full viewport.
-   The screen is kept portrait via manifest orientation lock (PWA) and
-   screen.orientation.lock() (Chrome/Android). Individual UI icons rotate
-   via JS so they appear upright regardless of physical device tilt. */
+/* Stream page container.
+   In PWA mode (manifest orientation: portrait), the screen is always portrait
+   and the @media rule below never fires.
+   In browser mode, the @media rule keeps the whole section portrait even when
+   the viewport goes landscape — same technique as iOS Camera / FaceTime. */
 .stream-section {
   position: fixed;
   top: 0;
@@ -73,4 +74,20 @@ body {
   left: 0;
   overflow: hidden;
   background: black;
+}
+
+@media (orientation: landscape) {
+  .stream-section {
+    /* Swap axes: in landscape, 100svh ≈ portrait width, 100svw ≈ portrait height */
+    width: 100svh;
+    height: 100svw;
+    /* Centre the portrait block inside the landscape viewport */
+    top: calc((100svh - 100svw) / 2);
+    left: calc((100svw - 100svh) / 2);
+    right: auto;
+    bottom: auto;
+    /* Counter-rotate so the section appears portrait to the user */
+    transform: rotate(-90deg);
+    transform-origin: center center;
+  }
 }
