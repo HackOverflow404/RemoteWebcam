@@ -33,15 +33,15 @@ export function createTransformedTrack(
 
   let running = true;
   let ready = false;
-
-  // Physical device rotation in degrees (0/90/180/270), updated by setRotation().
-  // Used to compute the canvas correction for platforms where ctx.drawImage()
-  // delivers raw sensor pixels without orientation correction (iOS Safari).
-  let rot = 0;
+  let rot = 0; // physical device rotation degrees (0/90/180/270)
 
   const ensurePlay = () => { video.play().catch(() => {}); };
   video.onloadedmetadata = () => { ready = true; ensurePlay(); };
   video.onloadeddata = ensurePlay;
+
+  // Resume when page comes back to foreground (iOS suspends video in background)
+  const onVisible = () => { if (!document.hidden) ensurePlay(); };
+  document.addEventListener("visibilitychange", onVisible);
 
   const draw = () => {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -53,31 +53,27 @@ export function createTransformedTrack(
     const srcW = video.videoWidth || 1;
     const srcH = video.videoHeight || 1;
 
-    // On iOS Safari (and many Android browsers) ctx.drawImage() gives the raw
-    // camera sensor pixels WITHOUT the orientation correction that the <video>
-    // element's display applies. The iPhone sensor is landscape-oriented, so
-    // when getUserMedia delivers landscape dims (srcW > srcH), the drawn pixels
-    // are always landscape regardless of how the phone is held.
+    // iOS Safari's ctx.drawImage() gives raw landscape sensor pixels when
+    // srcW > srcH (camera gave landscape-oriented dims via getUserMedia).
+    // Apply (rot − 90°) canvas correction to make the person appear upright.
+    // When srcH > srcW the browser already applied portrait correction — no
+    // canvas rotation needed, just contain-fit.
     //
-    // When srcH > srcW the browser negotiated portrait output — pixels are
-    // already correctly oriented, so just contain-fit without rotation.
-    //
-    // Correction angle maps physical device rotation to canvas rotation:
-    //   rot=0   (portrait)         → correctionDeg=270 (= −90°): landscape→portrait
-    //   rot=90  (landscape-right)  → correctionDeg=0:   landscape→landscape ✓
-    //   rot=180 (upside-down)      → correctionDeg=90:  landscape→portrait flipped
-    //   rot=270 (landscape-left)   → correctionDeg=180: landscape→landscape flipped
+    // Correction table (cameraIsLandscape = true):
+    //   rot=0   (portrait)        → correctionDeg=270 (=−90°)  portrait ✓
+    //   rot=90  (landscape-right) → correctionDeg=0             landscape ✓
+    //   rot=180 (upside-down)     → correctionDeg=90            portrait flipped ✓
+    //   rot=270 (landscape-left)  → correctionDeg=180           landscape flipped ✓
     const cameraIsLandscape = srcW > srcH;
     const correctionDeg = cameraIsLandscape ? ((rot - 90 + 360) % 360) : 0;
     const correctionRad = (correctionDeg * Math.PI) / 180;
 
-    // After applying correctionDeg rotation, effective display dimensions are swapped
-    // for 90° or 270° rotations (landscape frame becomes portrait in canvas space).
+    // After rotation, effective display dims may be swapped (90°/270° rotations)
     const is90or270 = correctionDeg === 90 || correctionDeg === 270;
     const effW = is90or270 ? srcH : srcW;
     const effH = is90or270 ? srcW : srcH;
 
-    // Contain: scale to fit within outW×outH preserving aspect ratio.
+    // Contain: scale to fit within outW×outH, letterbox/pillarbox remainder
     const scale = Math.min(outW / effW, outH / effH);
     const drawW = srcW * scale;
     const drawH = srcH * scale;
@@ -89,31 +85,71 @@ export function createTransformedTrack(
     ctx.restore();
   };
 
-  // requestVideoFrameCallback prevents frozen canvas streams on iOS
+  // ─── Drawing loop ──────────────────────────────────────────────────────────
+  // Strategy: use requestVideoFrameCallback (rvfc) when available — it fires
+  // in sync with video frame delivery and prevents frozen canvas streams on iOS.
+  // Additionally run a RAF watchdog in parallel: if rvfc stalls (video suspended
+  // by iOS power management, page backgrounded, etc.), the watchdog detects the
+  // gap and keeps drawing so the WebRTC stream never appears fully frozen.
+
   const rvfc = (video as any).requestVideoFrameCallback?.bind(video) as
     | ((cb: (now: number, metadata: any) => void) => number)
     | undefined;
 
   let rafId = 0;
   let vfcId = 0;
+  let lastVfcMs = 0;      // timestamp of last rvfc draw
+  let vfcScheduled = false; // whether an rvfc callback is pending
 
-  const loop = () => {
-    if (!running) return;
-    draw();
-    if (rvfc) {
-      vfcId = rvfc(() => loop());
-    } else {
+  if (rvfc) {
+    const onVfc = () => {
+      if (!running) return;
+      vfcScheduled = false;
+      lastVfcMs = performance.now();
+      draw();
+      vfcScheduled = true;
+      vfcId = rvfc(onVfc);
+    };
+
+    // Kick off the rvfc loop
+    vfcScheduled = true;
+    vfcId = rvfc(onVfc);
+
+    // RAF watchdog: runs every frame, wakes up the rvfc loop if it stalled.
+    // 500 ms without an rvfc callback → assume video suspended → fall back.
+    const STALL_MS = 500;
+    const watchdog = () => {
+      if (!running) return;
+      const now = performance.now();
+      if (now - lastVfcMs > STALL_MS) {
+        // rvfc has stalled — draw the current (possibly frozen) frame and
+        // try to restart both video playback and the rvfc loop.
+        draw();
+        ensurePlay();
+        if (!vfcScheduled) {
+          vfcScheduled = true;
+          vfcId = rvfc(onVfc);
+        }
+      }
+      rafId = requestAnimationFrame(watchdog);
+    };
+    rafId = requestAnimationFrame(watchdog);
+  } else {
+    // Plain RAF loop for browsers without rvfc
+    const loop = () => {
+      if (!running) return;
+      draw();
       rafId = requestAnimationFrame(loop);
-    }
-  };
-
-  loop();
+    };
+    loop();
+  }
 
   return {
     track: outputTrack,
     setRotation: (r: number) => { rot = r; },
     stop: () => {
       running = false;
+      document.removeEventListener("visibilitychange", onVisible);
       if (rafId) cancelAnimationFrame(rafId);
       try { (video as any).cancelVideoFrameCallback?.(vfcId); } catch {}
       try { outputTrack.stop(); } catch {}
