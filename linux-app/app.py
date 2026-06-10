@@ -1,4 +1,7 @@
 import requests
+import shutil
+import subprocess
+import threading
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -19,17 +22,73 @@ import numpy as np
 import cv2
 
 
+def _load_v4l2loopback() -> bool:
+    """
+    Ensure the v4l2loopback kernel module is loaded.
+    Tries sudo -n first (works if user has NOPASSWD for modprobe),
+    then pkexec (shows a graphical auth dialog on desktop Linux).
+    Returns True if the module is loaded/was already loaded.
+    """
+    try:
+        out = subprocess.check_output(["lsmod"], text=True, timeout=5)
+        if "v4l2loopback" in out:
+            print("[v4l2loopback] already loaded")
+            return True
+    except Exception:
+        pass
+
+    args = [
+        "modprobe", "v4l2loopback",
+        "devices=1", "video_nr=2",
+        "card_label=PixelStreamer",
+        "exclusive_caps=1",
+    ]
+
+    # Non-interactive sudo (works when the user has NOPASSWD for modprobe)
+    try:
+        r = subprocess.run(["sudo", "-n"] + args, timeout=5,
+                           capture_output=True)
+        if r.returncode == 0:
+            print("[v4l2loopback] loaded via sudo -n")
+            return True
+    except Exception:
+        pass
+
+    # pkexec — shows a native graphical auth dialog
+    if shutil.which("pkexec"):
+        try:
+            r = subprocess.run(["pkexec"] + args, timeout=60,
+                               capture_output=True)
+            if r.returncode == 0:
+                print("[v4l2loopback] loaded via pkexec")
+                return True
+        except Exception:
+            pass
+
+    print(
+        "[v4l2loopback] Could not auto-load.  Run manually:\n"
+        "  sudo modprobe v4l2loopback devices=1 video_nr=2 "
+        "card_label=PixelStreamer exclusive_caps=1"
+    )
+    return False
+
+
 class PixelStreamerApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self._latest_frame = None
         self._frame_timer = QTimer(self)
         self._frame_timer.timeout.connect(self.render_latest_frame)
-        self._frame_timer.start(33) 
-        
+        self._frame_timer.start(33)
+
         self.code = None
         self.worker = None
         self.initUI()
+
+        # Load v4l2loopback in a background thread so the GUI stays responsive.
+        # If the user needs to authenticate via pkexec the dialog will appear
+        # on top of the main window a moment after launch.
+        threading.Thread(target=_load_v4l2loopback, daemon=True).start()
 
     def initUI(self):
         with open("./assets/style.qss", "r") as f:

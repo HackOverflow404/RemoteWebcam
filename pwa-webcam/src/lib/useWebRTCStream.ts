@@ -250,6 +250,16 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
         if (pc.connectionState === "connected") {
           setStatus("connected");
           setOn(true);
+          // Push for high bitrate now that the connection is live
+          pc.getSenders().forEach((sender) => {
+            if (sender.track?.kind !== "video") return;
+            const params = sender.getParameters();
+            if (!params.encodings || params.encodings.length === 0) {
+              params.encodings = [{}];
+            }
+            params.encodings[0].maxBitrate = 8_000_000; // 8 Mbps
+            sender.setParameters(params).catch(() => {});
+          });
           return;
         }
 
@@ -314,6 +324,24 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       });
 
       
+      // Prefer VP9 or H.264 for better compression and quality
+      pc.getTransceivers().forEach((t) => {
+        if (t.sender.track?.kind !== "video") return;
+        const caps = RTCRtpSender.getCapabilities?.("video");
+        if (!caps) return;
+        const preferred = caps.codecs.filter((c) =>
+          /vp9|h264/i.test(c.mimeType)
+        );
+        if (preferred.length > 0) {
+          try {
+            t.setCodecPreferences([
+              ...preferred,
+              ...caps.codecs.filter((c) => !preferred.includes(c)),
+            ]);
+          } catch {}
+        }
+      });
+
       await pc.setLocalDescription(await pc.createOffer());
       if (!mountedRef.current) return;
 

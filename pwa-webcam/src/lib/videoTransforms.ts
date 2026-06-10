@@ -30,6 +30,9 @@ export function createTransformedTrack(
   const ctx = canvas.getContext("2d", { alpha: false })!;
   const stream = canvas.captureStream(fps);
   const outputTrack = stream.getVideoTracks()[0];
+  // Hint the WebRTC encoder that this is live motion video (not a screen/document),
+  // so it allocates more bits for the stream instead of optimising for sharpness.
+  try { (outputTrack as any).contentHint = "motion"; } catch {}
 
   let running = true;
   let ready = false;
@@ -53,19 +56,33 @@ export function createTransformedTrack(
     const srcW = video.videoWidth || 1;
     const srcH = video.videoHeight || 1;
 
-    // iOS Safari's ctx.drawImage() gives raw landscape sensor pixels when
-    // srcW > srcH (camera gave landscape-oriented dims via getUserMedia).
-    // Apply (rot − 90°) canvas correction to make the person appear upright.
-    // When srcH > srcW the browser already applied portrait correction — no
-    // canvas rotation needed, just contain-fit.
+    // iOS Safari's ctx.drawImage() gives raw landscape sensor pixels when the
+    // camera reports landscape dims (srcW > srcH).  We must rotate the canvas
+    // to make the person appear upright on the Linux side.
+    //
+    // Physical orientation → rot (from gyro):
+    //   CW tilt  (left side down, gamma < 0) → rot = 270
+    //   CCW tilt (right side down, gamma > 0) → rot = 90
+    //
+    // For landscape orientations (rot=90 or 270) the camera IS correctly aligned
+    // with the physical device — no canvas rotation needed; the stream fills the
+    // 1280×720 canvas as a proper landscape frame.
+    //
+    // For portrait/upside-down (rot=0/180) the sensor is 90° off — apply the
+    // appropriate correction so Linux receives an upright portrait-letterboxed frame.
     //
     // Correction table (cameraIsLandscape = true):
-    //   rot=0   (portrait)        → correctionDeg=270 (=−90°)  portrait ✓
-    //   rot=90  (landscape-right) → correctionDeg=0             landscape ✓
-    //   rot=180 (upside-down)     → correctionDeg=90            portrait flipped ✓
-    //   rot=270 (landscape-left)  → correctionDeg=180           landscape flipped ✓
+    //   rot=0   (portrait)      → 270° (=−90°): unrotate landscape to portrait  ✓
+    //   rot=90  (CCW landscape) →   0°: already correct                          ✓
+    //   rot=180 (upside-down)   →  90°: unrotate other way                       ✓
+    //   rot=270 (CW landscape)  →   0°: already correct (was 180° — WRONG)       ✓
     const cameraIsLandscape = srcW > srcH;
-    const correctionDeg = cameraIsLandscape ? ((rot - 90 + 360) % 360) : 0;
+    let correctionDeg = 0;
+    if (cameraIsLandscape) {
+      if      (rot === 0)   correctionDeg = 270;
+      else if (rot === 180) correctionDeg = 90;
+      // rot === 90 or 270: both landscape orientations → 0° correction
+    }
     const correctionRad = (correctionDeg * Math.PI) / 180;
 
     // After rotation, effective display dims may be swapped (90°/270° rotations)
