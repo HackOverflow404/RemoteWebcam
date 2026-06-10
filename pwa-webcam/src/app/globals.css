@@ -76,18 +76,7 @@ body {
   background: black;
 }
 
-@media (orientation: landscape) {
-  .stream-section {
-    /* Swap axes: in landscape, 100svh ≈ portrait width, 100svw ≈ portrait height */
-    width: 100svh;
-    height: 100svw;
-    /* Centre the portrait block inside the landscape viewport */
-    top: calc((100svh - 100svw) / 2);
-    left: calc((100svw - 100svh) / 2);
-    right: auto;
-    bottom: auto;
-    /* Counter-rotate so the section appears portrait to the user */
-    transform: rotate(-90deg);
-    transform-origin: center center;
-  }
-}
+/* No @media landscape rule here — the counter-rotation direction depends on
+   whether the viewport went CW or CCW, which CSS alone cannot distinguish.
+   The stream page applies the correct rotation via inline style using
+   window.orientation (90 → CCW → rotate(-90deg), -90 → CW → rotate(90deg)). */

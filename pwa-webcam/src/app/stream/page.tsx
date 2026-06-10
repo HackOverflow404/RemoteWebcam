@@ -98,26 +98,38 @@ function StreamPage() {
   const resolution = "hd";
   const exposure = 0;
 
-  // rot = physical device angle (0/90/180/270) from the IMU gyro.
-  const [rot, setRot] = useState(0);
-  const rotRef = useRef(0);
+  // viewportOrientation: raw window.orientation value (0 / 90 / -90 / 180).
+  // The manifest no longer locks orientation so the viewport rotates freely,
+  // and this value changes without any permission dialog.
+  const [viewportOrientation, setViewportOrientation] = useState(0);
+  const lastRotRef = useRef(-1); // used in orientation effect (after handleRotate is defined)
 
-  // Whether the CSS landscape @media rule is currently active.
-  // When true, .stream-section is rotated −90° by CSS, so every icon needs
-  // an extra +90° to compensate and appear upright to the tilted user.
-  // In PWA portrait-locked mode this is always false (media query never fires).
-  const [isViewportLandscape, setIsViewportLandscape] = useState(false);
-  useEffect(() => {
-    const mq = window.matchMedia("(orientation: landscape)");
-    const handler = () => setIsViewportLandscape(mq.matches);
-    handler();
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
-  }, []);
+  // Only 90° / -90° are landscape (viewport is rotated and dims are swapped).
+  // 180° is portrait upside-down — no dim swap, just rotate.
+  const isViewportLandscape = Math.abs(viewportOrientation) === 90;
 
-  // Effective icon rotation: compensate for the CSS section counter-rotation
-  // so icons always appear upright from the user's perspective.
-  const iconRot = isViewportLandscape ? rot + 90 : rot;
+  // Counter-rotate the section so the UI stays portrait in physical space
+  // while the viewport is landscape. Works because the manifest no longer
+  // applies an orientation lock, so the viewport (and window.orientation)
+  // actually reflects the physical tilt without needing gyro permission.
+  const sectionLandscapeStyle: React.CSSProperties = isViewportLandscape
+    ? {
+        width: "100svh",
+        height: "100svw",
+        top: "calc((100svh - 100svw) / 2)",
+        left: "calc((100svw - 100svh) / 2)",
+        right: "auto",
+        bottom: "auto",
+        transform: `rotate(${-viewportOrientation}deg)`,
+        transformOrigin: "center center",
+      }
+    : viewportOrientation === 180
+    ? { transform: "rotate(180deg)", transformOrigin: "center center" }
+    : {};
+
+  // No extra icon rotation needed: the section counter-rotation already keeps
+  // all content (icons included) visually upright relative to the user.
+  const iconRot = 0;
 
   const handleRemoteTermination = useCallback((_: boolean) => {
     setTimeout(() => router.push("/"), 1500);
@@ -173,6 +185,37 @@ function StreamPage() {
   const errorMessage =
     [mediaStreamError, RTCStreamError].find(Boolean) || null;
 
+  // Orientation detection — must be after handleRotate is declared above.
+  // Reads window.orientation on change (no permission dialog needed) and
+  // updates both the section rotation state and the canvas stream correction.
+  useEffect(() => {
+    const readOri = (): number => {
+      const w = window as any;
+      if (typeof w.orientation === "number") return w.orientation as number;
+      const type = window.screen?.orientation?.type ?? "";
+      if (type === "landscape-primary")   return  90;
+      if (type === "landscape-secondary") return -90;
+      if (type === "portrait-secondary")  return 180;
+      return 0;
+    };
+    const update = () => {
+      const o = readOri();
+      setViewportOrientation(o);
+      const r = ((o % 360) + 360) % 360; // normalize to 0/90/180/270
+      if (r !== lastRotRef.current) {
+        lastRotRef.current = r;
+        handleRotate(r);
+      }
+    };
+    update();
+    window.addEventListener("orientationchange", update, { passive: true });
+    window.screen?.orientation?.addEventListener?.("change", update);
+    return () => {
+      window.removeEventListener("orientationchange", update);
+      window.screen?.orientation?.removeEventListener?.("change", update);
+    };
+  }, [handleRotate]);
+
   // --- startup ---
   useEffect(() => {
     if (code) startMedia();
@@ -186,133 +229,6 @@ function StreamPage() {
     if (connectionStatus === "disconnected" && isStreamOn) stopMedia();
   }, [connectionStatus]);
 
-  // Lock the screen to portrait where the API is supported (Chrome/Android PWA).
-  // On iOS the manifest orientation: "portrait" provides the lock; the API call
-  // throws and is silently swallowed. Either way, the physical-rotation gyro
-  // still detects tilt and rotates individual icons independently.
-  useEffect(() => {
-    (screen.orientation as any)?.lock?.("portrait-primary")?.catch?.(() => {});
-    return () => {
-      (screen.orientation as any)?.unlock?.();
-    };
-  }, []);
-
-  // iOS 13+ requires explicit permission to read DeviceOrientationEvent data.
-  // The API must be called from a user-gesture context, so we hook into the
-  // first touch/click on the page — whichever comes first.
-  useEffect(() => {
-    const request = async () => {
-      const DOE = DeviceOrientationEvent as any;
-      if (typeof DOE.requestPermission === "function") {
-        try { await DOE.requestPermission(); } catch { /* user denied or unavailable */ }
-      }
-    };
-    document.addEventListener("touchstart", request, { once: true, capture: true });
-    document.addEventListener("click",      request, { once: true, capture: true });
-    return () => {
-      document.removeEventListener("touchstart", request, true);
-      document.removeEventListener("click",      request, true);
-    };
-  }, []);
-
-  // Physical rotation detection — drives icon counter-rotation only.
-  //
-  // Primary path: DeviceOrientationEvent (gamma / beta axes from the IMU).
-  // This reads the physical sensor directly and works in iOS PWA mode where
-  // screen.orientation is always "portrait-primary" and never changes.
-  //
-  // Fallback path: screen / window orientation APIs, used in browser mode on
-  // Android where the viewport actually rotates. Skipped once the IMU fires.
-  //
-  // Hysteresis: we use a ±55° threshold to enter a new bucket but only leave
-  // it once the angle crosses back past ±35°. This prevents the icon from
-  // flickering when the phone rests near the 45° boundary.
-  useEffect(() => {
-    const norm = (d: number) => ((d % 360) + 360) % 360;
-    let doeActive = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let pendingAngle = rotRef.current;
-
-    // Classify the raw gamma/beta into a 90° bucket with hysteresis.
-    // currentBucket is the last committed angle so we can apply the dead-zone.
-    const classifyDOE = (g: number, b: number, current: number): number => {
-      const abs = Math.abs(g);
-      // In an established landscape bucket, only leave at <35° (dead zone)
-      if (current === 90  && g > 0  && abs > 35) return 90;
-      if (current === 270 && g < 0  && abs > 35) return 270;
-      if (current === 180 && b < 0  && b > -55)  return 180;
-      // Enter a new bucket with a 55° threshold for stability
-      if (g >  55) return 90;
-      if (g < -55) return 270;
-      if (b < -55) return 180;
-      return 0;
-    };
-
-    const commit = (angle: number) => {
-      const n = norm(angle);
-      if (n === pendingAngle) return;
-      pendingAngle = n;
-      if (timer) clearTimeout(timer);
-      // 250 ms debounce — long enough for iOS to settle, short enough to feel crisp
-      timer = setTimeout(() => {
-        timer = null;
-        if (n !== rotRef.current) {
-          rotRef.current = n;
-          setRot(n);
-          handleRotate(n);
-        }
-      }, 250);
-    };
-
-    const onDOE = (e: DeviceOrientationEvent) => {
-      if (e.gamma === null) return;
-      doeActive = true;
-      commit(classifyDOE(e.gamma, e.beta ?? 0, rotRef.current));
-    };
-
-    // Fallback: screen/window APIs for browser mode and Android.
-    const getAngle = (): number => {
-      const w = window as any;
-      if (typeof w.orientation === "number") {
-        const o = w.orientation as number;
-        if (o !== 0) return norm(o);
-        if (window.innerWidth <= window.innerHeight) return 0;
-      }
-      const so = window.screen?.orientation;
-      if (so?.type) {
-        if (so.type === "landscape-primary")   return 90;
-        if (so.type === "landscape-secondary") return 270;
-        if (so.type === "portrait-secondary")  return 180;
-        return 0;
-      }
-      return window.innerWidth > window.innerHeight ? 90 : 0;
-    };
-
-    const onScreenChange = () => { if (!doeActive) commit(getAngle()); };
-    const onVisible = () => { if (!document.hidden) onScreenChange(); };
-
-    commit(getAngle()); // seed from screen API on mount
-
-    const vid = videoRef.current;
-    window.addEventListener("deviceorientation",  onDOE,          { passive: true });
-    window.addEventListener("orientationchange",  onScreenChange, { passive: true });
-    window.addEventListener("resize",             onScreenChange, { passive: true });
-    window.addEventListener("pageshow",           onScreenChange, { passive: true });
-    window.screen?.orientation?.addEventListener?.("change", onScreenChange);
-    document.addEventListener("visibilitychange", onVisible);
-    vid?.addEventListener("resize", onScreenChange);
-
-    return () => {
-      if (timer) clearTimeout(timer);
-      window.removeEventListener("deviceorientation",  onDOE);
-      window.removeEventListener("orientationchange",  onScreenChange);
-      window.removeEventListener("resize",             onScreenChange);
-      window.removeEventListener("pageshow",           onScreenChange);
-      window.screen?.orientation?.removeEventListener?.("change", onScreenChange);
-      document.removeEventListener("visibilitychange", onVisible);
-      vid?.removeEventListener("resize", onScreenChange);
-    };
-  }, [handleRotate]);
 
   useEffect(() => {
     return () => { stopStream(); };
@@ -334,11 +250,9 @@ function StreamPage() {
   const ConnIcon = connIcons[connectionStatus];
 
   return (
-    // .stream-section is defined in globals.css.
-    // In browser landscape mode the CSS @media rule instantly counter-rotates the
-    // container so the layout stays portrait — no JS delay, no snap.
     <section
       className="stream-section"
+      style={sectionLandscapeStyle}
       onDoubleClick={async () => {
         const track = await flipCamera();
         if (track && isStreamOn) replaceTrack("video", track);
