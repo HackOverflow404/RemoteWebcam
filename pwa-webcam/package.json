@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
-    "dev:local": "next dev --turbopack --hostname 0.0.0.0 --experimental-https --experimental-https-key .cert/dev-key.pem --experimental-https-cert .cert/dev.pem",
+    "dev:local": "next dev --turbopack --hostname 0.0.0.0",
     "build": "next build",
     "start": "next start",
     "deploy": "next build"
