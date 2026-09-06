@@ -2,7 +2,7 @@ PySide6
 requests
 opencv-python
 aiortc
-av
+av==14.2.0  # pinned: 14.3+ ship no wheels & fail to build against ffmpeg 8
 numpy
 pip-tools
 pyvirtualcam

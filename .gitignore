@@ -1,4 +1,19 @@
-# Private firebase key
-remote-webcam-b70ab-firebase-adminsdk-fbsvc-4cecd4594f.json
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Secrets — never commit
 .env
-test/
+.env.*
+*firebase-adminsdk*.json
+*-adminsdk-*.json
+
+# Editor/agent local settings
+.claude/
+*.bak.*
+
+# Node
+node_modules/
