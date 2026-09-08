@@ -1,0 +1,573 @@
+I’m building a WebRTC-based streaming prototype with 3 pieces:
+1. Sender (Next.js + React):
+- Captures user audio & video via getUserMedia
+- Fetches TURN credentials from my endpoint
+- Creates an SDP offer and POSTs it to submitOffer
+- Polls checkAnswer for the SDP answer
+
+2. Receiver (QtPython + aiortc + PySide6):
+- Polls checkOffer until the browser’s offer arrives
+- Creates an RTCPeerConnection with the same TURN config
+- Sets remote description to the offer, creates an answer, gathers ICE
+- Listens for ontrack, decodes frames, and displays them via OpenCV
+
+3. Signaling (Firebase):
+- Code generation: generateCode() produces a unique 5‑character code and stores { status: "waiting" }
+- Offer/Answer workflow:
+  - submitOffer(code, offer) updates the doc to { offer, status: "offered" }
+  - checkOffer(code) returns the stored offer once status === "offered"
+  - Receiver writes back via submitAnswer(code, answer) → { answer, status: "answered" }
+  - Browser polls checkAnswer(code) until it sees the answer
+- Clean‑up & maintenance: endpoints for deleteCode, validateCode, updateOffer, plus a getTurnCredentials function that proxies Twilio tokens
+- Development vs. production: right now I’m using simple HTTP polling for all of the above, but I plan to switch to real‑time WebHooks (and encrypt the Firestore entries) once I roll out database encryption.
+
+What’s working
+- SDP exchange flows end‑to‑end and logs look correct.
+- Track negotiation fires ontrack on the Python side for both audio & video.
+- SDP sanitization ensures only one session fingerprint + ICE lines.
+
+What’s not working
+- ICE connectivity: Chrome logs host/STUN candidate errors, goes from checking → disconnected → failed without ever succeeding.
+- No media: Python’s track.recv() always times out—no frames arrive.
+- TURN relay attempts: even with iceTransportPolicy: 'relay' and filtering for typ relay, ICE still never pairs.
+
+Browser Logs (Next.js)
+```
+[useWebRTCStream] ICE gathering state → gathering
+…
+[useWebRTCStream] ICE gathering state → complete
+[useWebRTCStream] offer submitted OK
+[useWebRTCStream] polling for answer (delay 2000 ms)
+…
+[useWebRTCStream] answer received { type: 'answer', sdp: 'v=0…' }
+[useWebRTCStream] remote description set – streaming should begin
+[useWebRTCStream] ICE connection state → checking
+[useWebRTCStream] ICE connection state → disconnected
+[useWebRTCStream] peer connectionState → failed
+```
+
+Python logs (QtPython)
+```
+[WebRTC] Track received: audio
+[WebRTC] Track received: video
+Waiting for frame...
+Timeout waiting for frame, continuing...
+…
+[WebRTC] ICE gathering state: complete
+[WebRTC] Sending sanitized answer SDP
+[WebRTC] Answer submitted successfully
+```
+
+Next.js useWebRTCStream hook
+```
+import { useState, useRef, useCallback, useEffect } from 'react';
+
+export type ConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error';
+export type MediaState       = 'on' | 'off' | 'error';
+
+export interface UseWebRTCStreamProps {
+  videoRef:        React.RefObject<HTMLVideoElement | null>;
+  media:           MediaStream | null;
+  sessionCode:     string;
+  isMicOn:         MediaState;
+  isVidOn:         MediaState;
+  isFrontCamera:   boolean;
+  resolution:      string;
+  fps:             number;
+  exposure:        number;
+  startMedia:      () => void;
+  stopMedia:       () => void;
+}
+
+export default function useWebRTCStream (initialProps: UseWebRTCStreamProps) {
+  const propsRef = useRef(initialProps);
+  useEffect(() => { propsRef.current = initialProps; });
+
+  const peerRef    = useRef<RTCPeerConnection | null>(null);
+  const statsRef   = useRef<NodeJS.Timeout | null>(null);
+  const pollingRef = useRef(false);
+  const hasAutoStarted = useRef(false);
+
+  const [status, setStatus]     = useState<ConnectionState>('disconnected');
+  const [error,  setError]      = useState<string | null>(null);
+  const [on,     setOn]         = useState(false);
+
+  const log = (...msg: unknown[]) => console.log('[useWebRTCStream]', ...msg);
+
+  const cleanup = useCallback(() => {
+    log('cleanup() called');
+    pollingRef.current = false;
+
+    if (statsRef.current) {
+      log('clearing stats interval');
+      clearInterval(statsRef.current);
+      statsRef.current = null;
+    }
+
+    if (peerRef.current) {
+      log('closing RTCPeerConnection');
+      peerRef.current.close();
+      peerRef.current = null;
+    }
+
+    setStatus('disconnected');
+    setOn(false);
+  }, []);
+
+  useEffect(() => cleanup, [cleanup]);
+
+  const startStream = useCallback(async () => {
+    log('startStream() invoked');
+
+    if (status === 'connecting' || status === 'connected') {
+      log('already', status, ' – aborting duplicate call');
+      return;
+    }
+
+    const {
+      media, sessionCode, isMicOn, isVidOn,
+      resolution, fps, isFrontCamera, exposure,
+    } = propsRef.current;
+
+    if (!media) {
+      log('⚠️  No media present – setError and bail');
+      setError('No media');
+      return;
+    }
+
+    try {
+      setStatus('connecting');
+      log('fetching TURN credentials…');
+      const iceResp = await fetch('<turn credentials api url>', { method: 'POST' });
+      if (!iceResp.ok) throw new Error(`TURN creds fetch failed: ${iceResp.status}`);
+      const iceServers = await iceResp.json();
+      log('TURN credentials received', iceServers);
+
+
+      const pc = new RTCPeerConnection({ iceServers, bundlePolicy: 'max-bundle', iceTransportPolicy: 'relay' });
+      peerRef.current = pc;
+      log('RTCPeerConnection created');
+
+      pc.onicegatheringstatechange = () => log('ICE gathering state →', pc.iceGatheringState);
+      pc.oniceconnectionstatechange = () => log('ICE connection state →', pc.iceConnectionState);
+      pc.onconnectionstatechange = () => log('Peer connection state →', pc.connectionState);
+      pc.onicecandidateerror = (e) => log('ICE candidate error', e);
+
+
+      media.getTracks().forEach(t => {
+        const sender = pc.addTrack(t, media);
+        pc.getTransceivers().find(tr => tr.sender === sender)!.direction = 'sendonly';
+        log(`added track (${t.kind}) direction=sendonly`);
+      });
+
+
+      const offer = await pc.createOffer();
+      log('SDP offer created');
+      await pc.setLocalDescription(offer);
+      log('local description set');
+
+
+      await new Promise<void>(res => {
+        if (pc.iceGatheringState === 'complete') return res();
+        const cb = () => {
+          if (pc.iceGatheringState === 'complete') {
+            pc.removeEventListener('icegatheringstatechange', cb);
+            res();
+          }
+        };
+        pc.addEventListener('icegatheringstatechange', cb);
+      });
+      log('ICE gathering complete');
+
+
+      const body = {
+        code: sessionCode,
+        offer: pc.localDescription,
+        metadata: {
+          mic:  isMicOn === 'on',
+          webcam: isVidOn === 'on',
+          resolution, fps,
+          platform: 'mobile',
+          facingMode: isFrontCamera ? 'user' : 'environment',
+          exposureLevel: exposure,
+          ts: Date.now(),
+        },
+      };
+      log('submitting offer', body);
+      const submitResp = await fetch('<submit offer api url>', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!submitResp.ok) throw new Error(`submitOffer failed: ${submitResp.status}`);
+      log('offer submitted OK');
+
+
+      pc.onconnectionstatechange = () => {
+        log('peer connectionState →', pc.connectionState);
+        switch (pc.connectionState) {
+          case 'connected':   setStatus('connected'); setOn(true); break;
+          case 'disconnected':
+          case 'closed':      cleanup(); break;
+          case 'failed':      setError('PeerConnection failed'); propsRef.current.stopMedia(); cleanup(); break;
+          default:            setStatus('connecting');
+        }
+      };
+
+
+      pollingRef.current = true;
+      let delay = 2000;
+      while (pollingRef.current) {
+        log(`polling for answer (delay ${delay} ms)`);
+        const ansResp = await fetch('<answer polling api url>', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: sessionCode }),
+        });
+
+        if (ansResp.status === 204) {
+          await new Promise(r => setTimeout(r, delay));
+          delay = Math.min(delay * 2, 30000);
+          continue;
+        }
+
+        if (!ansResp.ok) throw new Error(`checkAnswer failed: ${ansResp.status}`);
+        const { answer } = await ansResp.json();
+        if (answer) {
+          log('answer received', answer);
+          await pc.setRemoteDescription(answer);
+          log('remote description set – streaming should begin');
+
+    
+          if (!statsRef.current) {
+            statsRef.current = setInterval(async () => {
+              if (pc.connectionState !== 'connected') return;
+              const stats = await pc.getStats();
+              stats.forEach(r => {
+                if (r.type === 'candidate-pair' && r.state === 'succeeded')
+                  log('ICE ✔ succeeded via', r.localCandidateId, '→', r.remoteCandidateId);
+                if (r.type === 'outbound-rtp' && r.kind === 'video')
+                  log('Video outbound – packets', r.packetsSent, 'bytes', r.bytesSent);
+              });
+            }, 3000);
+            log('stats interval started');
+          }
+          break
+        }
+        await new Promise(r => setTimeout(r, delay));
+      }
+    } catch (e: any) {
+      log('Error during startStream –', e.message);
+      setError(e.message || 'unknown WebRTC error');
+      cleanup();
+    }
+  }, [cleanup, status]);
+
+  const stopStream = useCallback(() => {
+    log('stopStream called');
+    cleanup();
+  }, [cleanup]);
+
+  const toggleStream = useCallback(() => {
+    log('toggleStream – on?', on);
+    if (on) {
+      // Stop both media & WebRTC
+      propsRef.current.stopMedia();
+      stopStream();
+    } else if (propsRef.current.media) {
+      // Media already live → initiate WebRTC
+      startStream();
+    } else {
+      // First get user media, then our effect below will auto‐start WebRTC
+      propsRef.current.startMedia();
+    }
+  }, [on, stopStream, startStream]);
+
+
+  useEffect(() => {
+    if (initialProps.media && !hasAutoStarted.current) {
+      log('auto‑starting WebRTC stream');
+      hasAutoStarted.current = true;
+      startStream();
+    }
+  }, [initialProps.media, startStream]);
+
+  const replaceTrack = useCallback(async (kind: 'video' | 'audio', track: MediaStreamTrack | null) => {
+    const pc = peerRef.current;
+    if (!pc) { log('replaceTrack called but no pc'); return; }
+
+    const sender = pc.getSenders().find(s => s.track?.kind === kind);
+    if (sender) {
+      log(`replacing existing ${kind} track`);
+      await sender.replaceTrack(track);
+    } else if (track) {
+      log(`adding new ${kind} track (no sender)`);
+      pc.addTrack(track, propsRef.current.media!);
+    } else {
+      log(`no ${kind} sender and no new track – nothing to do`);
+    }
+  }, []);
+
+  return {
+    isStreamOn:        on,
+    connectionStatus:  status,
+    error,
+    replaceTrack,
+    startStream,
+    stopStream,
+    toggleStream,
+  };
+}
+```
+
+QtPython WebRTCWorker
+```
+import asyncio
+import json
+import threading
+import requests
+from aiortc import RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
+from PySide6.QtCore import QObject, Signal
+from av import VideoFrame
+import cv2
+import numpy as np
+from datetime import datetime, timedelta
+from enum import Enum
+import random
+
+class ConnectionState(Enum):
+    CONNECTING = "connecting"
+    CONNECTED = "connected"
+    DISCONNECTED = "disconnected"
+    FAILED = "failed"
+
+class WebRTCWorker(QObject):
+    video_frame_received = Signal(object)
+    connection_state_changed = Signal(ConnectionState)
+
+    def __init__(self, code: str, widget_win_id: int):
+        super().__init__()
+        self.code = code
+        self.offer = None
+        self.pc = None
+        self.running = False
+
+    def start(self):
+        self.running = True
+        threading.Thread(target = self._run_async_thread, daemon = True).start()
+        self.connection_state_changed.emit(ConnectionState.CONNECTING)
+
+    def stop(self):
+        self.running = False
+        if self.pc:
+            asyncio.run_coroutine_threadsafe(self.pc.close(), asyncio.get_event_loop())
+        self.connection_state_changed.emit(ConnectionState.DISCONNECTED)
+
+    def _run_async_thread(self):
+        asyncio.run(self._run())
+
+    async def _run(self):
+        if await self.poll_for_offer() == 1:
+            return
+        if not self.offer:
+            self.connection_state_changed.emit(ConnectionState.FAILED)
+            return
+        
+        ice_servers = self.fetch_ice_servers()
+        print("[TURN] Using ICE servers:", ice_servers)
+        config = RTCConfiguration(iceServers = ice_servers)
+        self.pc = RTCPeerConnection(configuration = config)
+        self.pc.addTransceiver('video', direction='recvonly')
+        self.pc.addTransceiver('audio', direction='recvonly')
+
+        @self.pc.on("connectionstatechange")
+        async def on_connectionstatechange():
+            state = self.pc.connectionState
+            print(f"[WebRTC] State: {state}")
+            match state:
+                case "connected":
+                    self.connection_state_changed.emit(ConnectionState.CONNECTED)
+                case "closed":
+                    self.connection_state_changed.emit(ConnectionState.DISCONNECTED)
+                case "failed":
+                    self.connection_state_changed.emit(ConnectionState.FAILED)
+                case "connecting":
+                    self.connection_state_changed.emit(ConnectionState.CONNECTING)
+
+        @self.pc.on("track")
+        def on_track(track):
+            print(f"[WebRTC] Track received: {track.kind}")
+            if track.kind == "video":
+                asyncio.ensure_future(self.handle_track(track))
+        
+        @self.pc.on("datachannel")
+        def on_datachannel(channel):
+            print(f"Data channel established: {channel.label}")
+            
+        @self.pc.on("iceconnectionstatechange")
+        async def on_iceconnchange():
+            print("[WebRTC] ICE connection state:", self.pc.iceConnectionState)
+        
+        # Prepare a Future to be resolved when ICE gathering is done
+        self.ice_complete = asyncio.get_event_loop().create_future()
+
+        @self.pc.on("icegatheringstatechange")
+        async def on_icegatheringstatechange():
+            print("[WebRTC] ICE gathering state:", self.pc.iceGatheringState)
+            if self.pc.iceGatheringState == "complete":
+                if not self.ice_complete.done():
+                    self.ice_complete.set_result(True)
+
+        # Set the remote SDP
+        await self.pc.setRemoteDescription(RTCSessionDescription(**self.offer))
+
+        # Create the answer
+        answer = await self.pc.createAnswer()
+        print("[WebRTC] Created answer:", answer)
+
+        # Start ICE gathering by setting the local description
+        await self.pc.setLocalDescription(answer)
+
+        # Now wait for ICE gathering to complete
+        await self.ice_complete
+
+        # Send the fully-formed answer SDP (includes ICE candidates)
+        self.send_answer(self.pc.localDescription)
+
+    async def poll_for_offer(self):
+        self.poll_attempt = 0
+        self.max_attempts = 30
+        self.base_delay = 1.0
+        self.max_delay = 30.0
+
+        while self.poll_attempt < self.max_attempts:
+            if not self.running or self.code is None:
+                print("🛑 Polling stopped.")
+                self.connection_state_changed.emit(ConnectionState.DISCONNECTED)
+                return 1
+
+            print(f"[Polling] Attempt {self.poll_attempt + 1}")
+            try:
+                response = requests.post(
+                    "offer polling api url",
+                    json = {"code": self.code},
+                    timeout=5
+                )
+                if response.status_code == 200:
+                    print("✅ Offer received!")
+                    self.offer = response.json().get("offer")
+                    self.connection_state_changed.emit(ConnectionState.CONNECTING)
+                    return 0
+                elif response.status_code == 204:
+                    print("🕐 Not ready yet...")
+                else:
+                    print(f"⚠️ Unexpected status: {response.status_code}")
+            except Exception as e:
+                print(f"❌ Poll error: {e}")
+
+            self.poll_attempt += 1
+            delay = random.uniform(0, min(self.max_delay, self.base_delay * (2 ** self.poll_attempt)))
+            print(f"🔁 Retrying in {delay:.2f} seconds...")
+            await asyncio.sleep(delay)
+
+        print("⛔ Gave up waiting for offer.")
+        self.connection_state_changed.emit(ConnectionState.FAILED)
+    
+    def fetch_ice_servers(self):
+        try:
+            response = requests.post("<turn credentials api url>", timeout = 10)
+            response.raise_for_status()
+            data = response.json()
+            
+            print(f"[WebRTC] Fetched ICE servers: {data}")
+
+            ice_servers = []
+            for server in data:
+                ice_servers.append(
+                    RTCIceServer(
+                        urls=server["urls"],
+                        username=server.get("username"),
+                        credential=server.get("credential")
+                    )
+                )
+            return ice_servers
+        except Exception as e:
+            print(f"❌ Failed to fetch TURN credentials: {e}")
+            return []
+    
+    def send_answer(self, sdp):
+        print(sdp)
+        try:
+            res = requests.post(
+                "<submit offer api url>",
+                json = {
+                    "code": self.code,
+                    "answer": {
+                        "sdp": sdp.sdp,
+                        "type": sdp.type
+                    },
+                },
+                timeout = 10
+            )
+            if res.status_code == 200:
+                print("[WebRTC] Answer submitted successfully")
+            else:
+                print(f"[WebRTC] Answer submission failed: {res.status_code}")
+        except Exception as e:
+            print(f"[WebRTC] Answer error: {e}")
+
+    
+    async def handle_track(self, track: MediaStreamTrack):
+        print("Inside handle track")
+        self.track = track
+        frame_count = 0
+        while True:
+            try:
+                print("Waiting for frame...")
+                frame = await asyncio.wait_for(track.recv(), timeout = 5.0)
+                frame_count += 1
+                print(f"Received frame {frame_count}")
+                
+                if isinstance(frame, VideoFrame):
+                    print(f"Frame type: VideoFrame, pts: {frame.pts}, time_base: {frame.time_base}")
+                    frame = frame.to_ndarray(format = "bgr24")
+                elif isinstance(frame, np.ndarray):
+                    print(f"Frame type: numpy array")
+                else:
+                    print(f"Unexpected frame type: {type(frame)}")
+                    continue
+             
+                 # Add timestamp to the frame
+                current_time = datetime.now()
+                new_time = current_time - timedelta(seconds = 55)
+                timestamp = new_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+                cv2.putText(frame, timestamp, (10, frame.shape[0] - 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
+                cv2.imwrite(f"imgs/received_frame_{frame_count}.jpg", frame)
+                print(f"Saved frame {frame_count} to file")
+                cv2.imshow("Frame", frame)
+    
+                # Exit on 'q' key press
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+            except asyncio.TimeoutError:
+                print("Timeout waiting for frame, continuing...")
+            except Exception as e:
+                print(f"Error in handle_track: {str(e)}")
+                if "Connection" in str(e):
+                    break
+        
+        print("Exiting handle_track")
+        await self.pc.close()
+```
+
+Things I’ve tried
+- Sanitizing SDP on both sides to keep only one session‑level fingerprint + ICE lines
+- Setting iceTransportPolicy: 'relay' in Chrome’s RTCPeerConnection config
+- Filtering out all host/STUN candidates from both the offer and the answer SDPs
+- Inspecting ICE candidate‑pairs via pc.getStats() and chrome://webrtc-internals
+- Verifying Twilio TURN credentials and swapping TURN endpoints
+- Logging every ICE event (onicecandidateerror, gathering state changes)
+- Switching between SHA‑256 and SHA‑384 fingerprint handling
+- Using HTTP polling for signaling before migrating to WebHooks with encrypted Firestore entries
+
+I can't seem to figure out why there is ICE never a valid candidate‐pair, even when I force relay‑only. Am I missing any critical SDP attribute or ICE setting? I am very very new to WebRTC and this is my first project so I would really really appreciate any help. Thanks in advance! Any insights or minimal working aiortc ↔ browser examples would be hugely appreciated.

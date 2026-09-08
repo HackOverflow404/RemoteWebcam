@@ -4,6 +4,8 @@ import {
   ProcessedTrack,
 } from "@/lib/videoTransforms";
 
+import { startSessionStats } from "@/lib/webrtcSessionStats";
+
 export type ConnectionState =
   | "connecting"
   | "connected"
@@ -53,7 +55,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
   const processedVideoRef = useRef<ProcessedTrack | null>(null);
   const outDimsRef = useRef<{ w: number; h: number } | null>(null);
   const sourceVideoTrackRef = useRef<MediaStreamTrack | null>(null);
-  const statsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sessionStatsRef = useRef<ReturnType<typeof startSessionStats> | null>(null);
   const wakeLock = useRef<WakeLockSentinel | null>(null);
   
   const [status, setStatus] = useState<ConnectionState>("disconnected");
@@ -108,6 +110,8 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
   const cleanup = useCallback(
     async (reason?: string) => {
       log("cleanup()", reason ?? "");
+      sessionStatsRef.current?.stop(reason);
+      sessionStatsRef.current = null;
 
       if (reason !== "remote-linux-termination") {
         if (dcRef.current?.readyState === "open") {
@@ -140,7 +144,6 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
 
       cleanupProcessedVideo();
       sourceVideoTrackRef.current = null;
-      stopStatsLogging();
 
       setOn(false);
       setStatus("disconnected");
@@ -161,32 +164,6 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
   // effect runs only on unmount and never re-registers on re-render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const startStatsLogging = (pc: RTCPeerConnection) => {
-    stopStatsLogging(); // ensure only one timer
-
-    statsTimerRef.current = setInterval(async () => {
-      try {
-        const stats = await pc.getStats(); // :contentReference[oaicite:3]{index=3}
-        stats.forEach((r: any) => {
-          // outbound-rtp == sender stats :contentReference[oaicite:4]{index=4}
-          if (r.type === "outbound-rtp" && r.kind === "video") {
-            // last encoded frame dimensions :contentReference[oaicite:5]{index=5}
-            console.log("[stats] outbound video:", r.frameWidth, r.frameHeight);
-          }
-        });
-      } catch (e) {
-        // ignore transient errors when closing
-      }
-    }, 1000); // polling regularly is expected :contentReference[oaicite:6]{index=6}
-  };
-
-  const stopStatsLogging = () => {
-    if (statsTimerRef.current) {
-      clearInterval(statsTimerRef.current);
-      statsTimerRef.current = null;
-    }
-  };
 
   const relayToggle = (trigger: "mic" | "cam" | "media", state: MediaState) => {
     if (dcRef.current) {
@@ -243,11 +220,13 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
 
       const pc = new RTCPeerConnection({ iceServers });
       peerRef.current = pc;
+      sessionStatsRef.current = startSessionStats(pc);
 
       pc.onconnectionstatechange = () => {
         log("connectionState →", pc.connectionState);
 
         if (pc.connectionState === "connected") {
+          sessionStatsRef.current?.markConnected();
           setStatus("connected");
           setOn(true);
           // Push for high bitrate now that the connection is live
@@ -344,8 +323,6 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
 
       await pc.setLocalDescription(await pc.createOffer());
       if (!mountedRef.current) return;
-
-      startStatsLogging(pc);
 
       await new Promise<void>((resolve) => {
         if (pc.iceGatheringState === "complete") return resolve();

@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import React, { useState } from "react";
+import CopySessionStats from "@/components/CopySessionStats";
 
 const CodeInput = React.lazy(() => import("@/components/CodeInput"));
 
@@ -106,6 +107,7 @@ export default function Home() {
       >
         {isLoading ? "Connecting..." : "Start Stream"}
       </button>
+      <CopySessionStats />
     </section>
   );
 }

@@ -33,6 +33,7 @@ import useMediaStream from "@/lib/useMediaStream";
 import type { MediaState } from "@/lib/useMediaStream";
 import useWebRTCStream from "@/lib/useWebRTCStream";
 import type { ConnectionState } from "@/lib/useWebRTCStream";
+import CopySessionStats from "@/components/CopySessionStats";
 
 // SVG icon maps — no font loading required, works offline on iPhone
 const micIcons: Record<MediaState, IconType> = {
@@ -428,6 +429,7 @@ function StreamPage() {
               />
             </button>
           </div>
+          <CopySessionStats />
         </footer>
       </div>
     </section>
