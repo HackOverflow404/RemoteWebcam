@@ -80,12 +80,33 @@ body {
 
 .stream-header {
   padding: max(0.75rem, var(--sat)) max(1rem, var(--sar)) 0.75rem max(1rem, var(--sal));
-  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.55), transparent);
 }
 
 .stream-controls {
   padding: 0.75rem max(1rem, var(--sar)) max(1.25rem, var(--sab)) max(1rem, var(--sal));
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.55), transparent);
+}
+
+.stream-scrim-top,
+.stream-scrim-controls {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.stream-scrim-top {
+  top: 0;
+  left: 0;
+  right: 0;
+  height: calc(7rem + var(--sat));
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.45), transparent);
+}
+
+.stream-scrim-controls {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: calc(14rem + var(--sab));
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.5), transparent);
 }
 
 .stream-landscape-stats {
@@ -100,6 +121,13 @@ body {
 
   .stream-controls {
     padding: max(0.75rem, var(--sat)) max(1rem, var(--sar)) max(0.75rem, var(--sab)) 1rem;
-    background: linear-gradient(to left, rgba(0, 0, 0, 0.55), transparent);
+  }
+
+  .stream-scrim-controls {
+    top: 0;
+    left: auto;
+    height: auto;
+    width: calc(11rem + var(--sar));
+    background: linear-gradient(to left, rgba(0, 0, 0, 0.45), transparent);
   }
 }

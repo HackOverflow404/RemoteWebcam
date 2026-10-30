@@ -20,10 +20,16 @@ export default function AudioVolumeIndicator({ isEnabled, mediaStream }: { isEna
     source.connect(analyser);
     const samples = new Float32Array(analyser.fftSize);
 
+    // iOS keeps an AudioContext suspended until resumed inside a user
+    // gesture; resuming from a timer is ignored, leaving the meter at zero.
+    const resume = () => { if (ctx.state !== "running") void ctx.resume(); };
+    resume();
+    const gestures = ["pointerdown", "touchend", "click"] as const;
+    gestures.forEach((g) => document.addEventListener(g, resume, { capture: true, passive: true }));
+
     // Update the bar directly instead of via React state: no re-render of the
     // stream page 12x per second while the camera pipeline is running.
     const timer = setInterval(() => {
-      if (ctx.state === "suspended") void ctx.resume();
       analyser.getFloatTimeDomainData(samples);
       let sum = 0;
       for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
@@ -34,6 +40,7 @@ export default function AudioVolumeIndicator({ isEnabled, mediaStream }: { isEna
 
     return () => {
       clearInterval(timer);
+      gestures.forEach((g) => document.removeEventListener(g, resume, { capture: true }));
       source.disconnect();
       void ctx.close();
     };

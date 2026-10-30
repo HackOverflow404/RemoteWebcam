@@ -234,6 +234,11 @@ function StreamPage() {
         style={{ transform: `scaleX(${isFrontCamera ? "-1" : "1"})` }}
       />
 
+      {/* Shading behind the overlays, laid out independently of them so the
+          gradients span the full edge without seams. */}
+      <div className="stream-scrim-top" aria-hidden="true" />
+      <div className="stream-scrim-controls" aria-hidden="true" />
+
       {/* Portrait: header on top, controls row along the bottom.
           Landscape: header on top, controls column down the right edge.
           Every edge pads by its own safe-area inset (notch / home bar). */}
@@ -242,7 +247,7 @@ function StreamPage() {
           <header
             className="stream-header flex items-center justify-between gap-3 pointer-events-auto"
           >
-            <button onClick={handleBack} className="p-2 rounded-full active:bg-white/10 transition-colors" aria-label="Return">
+            <button onClick={handleBack} className="p-2 rounded-full bg-black/40 backdrop-blur-sm active:bg-white/10 transition-colors" aria-label="Return">
               <MdKeyboardReturn size={28} color="white" />
             </button>
 
@@ -253,11 +258,11 @@ function StreamPage() {
             )}
 
             <div
-              className="flex items-center gap-1.5"
+              className="flex items-center gap-1.5 bg-black/50 backdrop-blur-sm rounded-lg px-2.5 py-1.5"
               style={{ color: connectionColor }}
               aria-label={"Connection: " + connectionStatus}
             >
-              <ConnIcon size={24} color={connectionColor} />
+              <ConnIcon size={22} color={connectionColor} />
               <span className="text-xs font-medium capitalize hidden sm:block">
                 {connectionStatus}
               </span>
