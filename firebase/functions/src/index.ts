@@ -1,8 +1,10 @@
 import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
+import { DocumentData, DocumentReference, DocumentSnapshot, FieldValue, Timestamp } from "firebase-admin/firestore";
 import twilio from "twilio";
 import dotenv from "dotenv";
 import corsLib from "cors";
+import { randomInt } from "crypto";
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -11,6 +13,14 @@ const cors = corsLib({ origin: true });
 dotenv.config();
 
 // --- Shared Utilities ---
+
+// No 0/O or 1/I: codes are read off a screen and typed on a phone.
+const CODE_CHARSET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+// Abandoned codes (app crashed, never deleted) are garbage-collected by a
+// Firestore TTL policy on `expiresAt`, and rejected once past it.
+const CODE_TTL_MS = 24 * 60 * 60 * 1000;
+// Long-poll cap; stays well under the 60s function timeout.
+const MAX_WAIT_MS = 25_000;
 
 function sendError(res: any, code: number, message: string) {
     return res.status(code).json({ error: message });
@@ -26,28 +36,80 @@ async function getCodeDoc(code: string) {
     return { docRef, doc, data: doc.data() };
 }
 
+function isExpired(data: DocumentData): boolean {
+    const expiresAt = data.expiresAt as Timestamp | undefined;
+    return !!expiresAt && expiresAt.toMillis() < Date.now();
+}
+
+async function createUniqueCode(extra: Record<string, unknown> = {}): Promise<string> {
+    for (;;) {
+        const code = Array.from({ length: 5 }, () => CODE_CHARSET[randomInt(CODE_CHARSET.length)]).join("");
+        const now = Date.now();
+        try {
+            // create() fails if the doc exists, so two concurrent requests can
+            // never be handed the same code.
+            await db.collection("codes").doc(code).create({
+                timestamp: Timestamp.fromMillis(now),
+                expiresAt: Timestamp.fromMillis(now + CODE_TTL_MS),
+                status: "waiting",
+                ...extra,
+            });
+            return code;
+        } catch (error: any) {
+            if (error?.code !== 6 /* ALREADY_EXISTS */) throw error;
+        }
+    }
+}
+
+function clampWait(waitMs: unknown): number {
+    const n = Number(waitMs);
+    if (!Number.isFinite(n) || n <= 0) return 0;
+    return Math.min(n, MAX_WAIT_MS);
+}
+
+/**
+ * Resolve with the doc snapshot as soon as its status is one of `statuses` or
+ * it is deleted, or with the latest snapshot after `waitMs`. Lets clients
+ * long-poll instead of re-requesting every second, so the other side's update
+ * reaches them within one Firestore round trip.
+ */
+function waitForStatus(
+    docRef: DocumentReference,
+    statuses: string[],
+    waitMs: number,
+    res: any,
+): Promise<DocumentSnapshot> {
+    return new Promise((resolve, reject) => {
+        let latest: DocumentSnapshot | undefined;
+        let settled = false;
+        let unsubscribe = () => {};
+        const finish = (err?: unknown) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            unsubscribe();
+            if (latest) resolve(latest);
+            else if (err) reject(err);
+            else docRef.get().then(resolve, reject);
+        };
+        const timer = setTimeout(() => finish(), waitMs);
+        // Client gave up (closed the connection); stop listening.
+        res.on("close", () => finish());
+        unsubscribe = docRef.onSnapshot((snap) => {
+            latest = snap;
+            if (!snap.exists || statuses.includes(snap.data()?.status)) finish();
+        }, (err) => finish(err));
+    });
+}
+
 // --- Functions ---
 export const generateCode = functions.https.onRequest((req, res) => {
     cors(req, res, async () => {
         try {
             if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
 
-            functions.logger.info("Generate Function: Request body:", { body: req.body });
-
-            const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-            let code: string;
-            let exists = false;
-
-            do {
-                code = Array.from({ length: 5 }, () => charset[Math.floor(Math.random() * charset.length)]).join("");
-                const doc = await db.collection("codes").doc(code).get();
-                exists = doc.exists;
-            } while (exists);
-
-            await db.collection("codes").doc(code).set({
-                timestamp: admin.firestore.Timestamp.now(),
-                status: "waiting"
-            });
+            const code = await createUniqueCode();
+            functions.logger.info("Generated code", { code });
 
             return res.status(200).json({ code });
         } catch (error) {
@@ -61,8 +123,6 @@ export const deleteCode = functions.https.onRequest((req, res) => {
     cors(req, res, async () => {
         try {
             if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
-
-            functions.logger.info("Delete Function: Request body:", { body: req.body });
 
             let { code } = req.body;
             code = (code || "").trim().toUpperCase();
@@ -85,8 +145,6 @@ export const validateCode = functions.https.onRequest((req, res) => {
                 return sendError(res, 405, "Method not Allowed");
             }
 
-            functions.logger.info("Validate Function: Request body:", {body: req.body});
-
             let { code } = req.body;
             code = (code || "").trim().toUpperCase();
 
@@ -100,6 +158,14 @@ export const validateCode = functions.https.onRequest((req, res) => {
                     success: false,
                     valid: false,
                     message: "Code not found" 
+                });
+            }
+
+            if (isExpired(data)) {
+                return res.status(410).json({
+                    success: true,
+                    valid: false,
+                    message: "Code expired"
                 });
             }
 
@@ -128,25 +194,35 @@ export const submitOffer = functions.https.onRequest((req, res) => {
         try {
             if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
 
-            functions.logger.info("Submit Offer Function: Request body:", { body: req.body });
-
             let { code, offer, metadata } = req.body;
             code = (code || "").trim().toUpperCase();
 
             if (!isValidCode(code)) return sendError(res, 400, "Invalid code format");
-            if (!offer || typeof offer !== "object") return sendError(res, 400, "Missing or invalid SDP offer");
+            if (!offer || typeof offer !== "object" || typeof offer.sdp !== "string") {
+                return sendError(res, 400, "Missing or invalid SDP offer");
+            }
+            functions.logger.info("Submit offer", { code });
 
-            const { docRef, doc, data } = await getCodeDoc(code);
-
-            if (!doc.exists || !data) return sendError(res, 404, "Code not found");
-            if (data.status !== "waiting") return sendError(res, 409, "Code already used or invalid");
-
-            await docRef.update({
-                offer,
-                metadata: metadata || null,
-                status: "offered",
-                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            const docRef = db.collection("codes").doc(code);
+            // Transaction so two phones racing on the same code can't both win.
+            const outcome = await db.runTransaction(async (tx) => {
+                const doc = await tx.get(docRef);
+                const data = doc.data();
+                if (!doc.exists || !data) return 404;
+                if (isExpired(data)) return 410;
+                if (data.status !== "waiting") return 409;
+                tx.update(docRef, {
+                    offer: { type: offer.type, sdp: offer.sdp },
+                    metadata: metadata || null,
+                    status: "offered",
+                    updatedAt: FieldValue.serverTimestamp(),
+                });
+                return 200;
             });
+
+            if (outcome === 404) return sendError(res, 404, "Code not found");
+            if (outcome === 410) return sendError(res, 410, "Code expired");
+            if (outcome === 409) return sendError(res, 409, "Code already used or invalid");
 
             return res.status(200).json({ success: true, message: "Offer and ICE candidates saved" });
         } catch (error) {
@@ -161,13 +237,17 @@ export const checkOffer = functions.https.onRequest((req, res) => {
         try {
             if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
 
-            functions.logger.info("Check Offer Function: Request body:", { body: req.body });
-            let { code } = req.body;
+            let { code, waitMs } = req.body;
             code = (code || "").trim().toUpperCase();
 
             if (!isValidCode(code)) return sendError(res, 400, "Invalid or missing code");
 
-            const { doc, data } = await getCodeDoc(code);
+            const docRef = db.collection("codes").doc(code);
+            const wait = clampWait(waitMs);
+            const doc = wait > 0
+                ? await waitForStatus(docRef, ["offered"], wait, res)
+                : await docRef.get();
+            const data = doc.data();
 
             if (!doc.exists || !data) return sendError(res, 404, "Code not found");
             if (data.status !== "offered") return res.status(204).send();
@@ -190,18 +270,21 @@ export const submitAnswer = functions.https.onRequest((req, res) => {
             if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
 
             let { code, answer, candidates } = req.body;
-            code = (code || "").trim().toUpperCase();
+            code = (typeof code === "string" ? code : "").trim().toUpperCase();
 
-            if (!code || !answer || typeof code !== "string") {
-                return sendError(res, 400, "Missing required fields");
+            if (!isValidCode(code)) return sendError(res, 400, "Invalid or missing code");
+            if (!answer || typeof answer !== "object" || typeof answer.sdp !== "string") {
+                return sendError(res, 400, "Missing or invalid SDP answer");
             }
+            functions.logger.info("Submit answer", { code });
 
-            const { docRef, doc } = await getCodeDoc(code);
+            const { docRef, doc, data } = await getCodeDoc(code);
 
-            if (!doc.exists) return sendError(res, 404, "Code not found");
+            if (!doc.exists || !data) return sendError(res, 404, "Code not found");
+            if (data.status !== "offered") return sendError(res, 409, "No pending offer for this code");
 
             await docRef.update({
-                answer,
+                answer: { type: answer.type, sdp: answer.sdp },
                 answerCandidates: candidates || [],
                 status: "answered",
             });
@@ -219,14 +302,17 @@ export const checkAnswer = functions.https.onRequest((req, res) => {
         try {
             if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
 
-            functions.logger.info("Check Answer Function: Request body:", { body: req.body });
-
-            let { code } = req.body;
+            let { code, waitMs } = req.body;
             code = (code || "").trim().toUpperCase();
 
             if (!isValidCode(code)) return sendError(res, 400, "Invalid or missing code");
 
-            const { doc, data } = await getCodeDoc(code);
+            const docRef = db.collection("codes").doc(code);
+            const wait = clampWait(waitMs);
+            const doc = wait > 0
+                ? await waitForStatus(docRef, ["answered"], wait, res)
+                : await docRef.get();
+            const data = doc.data();
 
             if (!doc.exists || !data) return sendError(res, 404, "Code not found");
             if (data.status !== "answered") return res.status(204).send();
@@ -247,8 +333,6 @@ export const updateOffer = functions.https.onRequest((req, res) => {
         try {
             if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
 
-            functions.logger.info("Update Offer Function: Request body:", { body: req.body });
-
             let { code, offer, candidates, metadata } = req.body;
             code = (code || "").trim().toUpperCase();
 
@@ -264,7 +348,7 @@ export const updateOffer = functions.https.onRequest((req, res) => {
                 offer,
                 candidates,
                 metadata: metadata || null,
-                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                updatedAt: FieldValue.serverTimestamp(),
             });
 
             return res.status(200).json({ success: true, message: "Offer updated successfully" });
@@ -275,58 +359,43 @@ export const updateOffer = functions.https.onRequest((req, res) => {
     });
 });
 
-export const getTurnCredentials = functions.https.onRequest(async (req, res) => {
+// Twilio tokens are valid for TOKEN_TTL_S; reuse one per instance for most of
+// that window so clients skip a Twilio round trip (~300-800ms) on connect.
+const TOKEN_TTL_S = 6 * 60 * 60;
+const TOKEN_REUSE_MS = (TOKEN_TTL_S - 60 * 60) * 1000;
+let cachedIceServers: { servers: unknown; fetchedAt: number } | null = null;
+let twilioClient: ReturnType<typeof twilio> | null = null;
+
+export const getTurnCredentials = functions.https.onRequest((req, res) => {
     cors(req, res, async () => {
         try {
             if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
 
-            const accountSid = process.env.TWILIO_ACCOUNT_SID;
-            const authToken = process.env.TWILIO_AUTH_TOKEN;
-            const client = twilio(accountSid, authToken);
+            if (!cachedIceServers || Date.now() - cachedIceServers.fetchedAt > TOKEN_REUSE_MS) {
+                twilioClient ??= twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+                const token = await twilioClient.tokens.create({ ttl: TOKEN_TTL_S });
+                cachedIceServers = { servers: token.iceServers, fetchedAt: Date.now() };
+            }
 
-            const token = await client.tokens.create();
-
-            res.status(200).json(token.iceServers);
+            return res.status(200).json(cachedIceServers.servers);
         } catch (error) {
-            functions.logger.error("Error in geTurnCredentials function:", error);
+            functions.logger.error("Error in getTurnCredentials function:", error);
             return sendError(res, 500, "Internal server error");
         }
     });
 });
-
-
-
-
-
-
-
 
 export const generateCodePushURL = functions.https.onRequest((req, res) => {
     cors(req, res, async () => {
         try {
             if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
 
-            functions.logger.info("Generate Code Push URL Function: Request body:", { body: req.body });
             
             let { url } = req.body;
             url = (url || "").trim();
             if (!url) return sendError(res, 400, "Missing URL");
 
-            const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-            let code: string;
-            let exists = false;
-
-            do {
-                code = Array.from({ length: 5 }, () => charset[Math.floor(Math.random() * charset.length)]).join("");
-                const doc = await db.collection("codes").doc(code).get();
-                exists = doc.exists;
-            } while (exists);
-
-            await db.collection("codes").doc(code).set({
-                timestamp: admin.firestore.Timestamp.now(),
-                status: "waiting",
-                url: url
-            });
+            const code = await createUniqueCode({ url });
 
             return res.status(200).json({ code });
         } catch (error) {
@@ -340,8 +409,6 @@ export const getURL = functions.https.onRequest((req, res) => {
     cors(req, res, async () => {
         try {
             if (req.method !== "POST") return sendError(res, 405, "Method Not Allowed");
-
-            functions.logger.info("Get URL Function: Request body:", { body: req.body });
 
             let { code } = req.body;
             code = (code || "").trim().toUpperCase();
