@@ -125,7 +125,8 @@ export async function submitOffer(code: string, offer: RTCSessionDescriptionInit
     }
     await sleep(500 * 2 ** attempt, signal);
   }
-  throw lastError instanceof Error ? lastError : new Error("Could not reach server");
+  console.error("[signaling] submitOffer failed:", lastError);
+  throw new SignalingError("Couldn't reach the server. Check your connection and try again.");
 }
 
 /** Wait for the desktop's answer; throws on deadline, deleted code, or abort. */

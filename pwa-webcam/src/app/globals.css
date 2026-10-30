@@ -19,6 +19,12 @@
   }
 }
 
+html {
+  /* iOS Safari inflates text when rotated to landscape unless told not to. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 html, body {
   margin: 0;
   padding: 0;
@@ -61,22 +67,39 @@ body {
   inset: 0;
 }
 
-/* Stream page container.
-   In PWA mode (manifest orientation: portrait), the screen is always portrait
-   and the @media rule below never fires.
-   In browser mode, the @media rule keeps the whole section portrait even when
-   the viewport goes landscape — same technique as iOS Camera / FaceTime. */
+/* Stream page: full-bleed video with overlay controls. The UI reflows with
+   the viewport instead of counter-rotating, so iOS's own rotation animation,
+   the camera preview and the safe-area insets all stay consistent. */
 .stream-section {
   position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: 0;
+  inset: 0;
   overflow: hidden;
   background: black;
+  touch-action: manipulation;
 }
 
-/* No @media landscape rule here — the counter-rotation direction depends on
-   whether the viewport went CW or CCW, which CSS alone cannot distinguish.
-   The stream page applies the correct rotation via inline style using
-   window.orientation (90 → CCW → rotate(-90deg), -90 → CW → rotate(90deg)). */
+.stream-header {
+  padding: max(0.75rem, var(--sat)) max(1rem, var(--sar)) 0.75rem max(1rem, var(--sal));
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.55), transparent);
+}
+
+.stream-controls {
+  padding: 0.75rem max(1rem, var(--sar)) max(1.25rem, var(--sab)) max(1rem, var(--sal));
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.55), transparent);
+}
+
+.stream-landscape-stats {
+  padding: 0 0 max(0.5rem, var(--sab)) max(0.5rem, var(--sal));
+}
+
+@media (orientation: landscape) {
+  /* Header spans only the video area; the controls column sits beside it. */
+  .stream-header {
+    padding-right: 1rem;
+  }
+
+  .stream-controls {
+    padding: max(0.75rem, var(--sat)) max(1rem, var(--sar)) max(0.75rem, var(--sab)) 1rem;
+    background: linear-gradient(to left, rgba(0, 0, 0, 0.55), transparent);
+  }
+}

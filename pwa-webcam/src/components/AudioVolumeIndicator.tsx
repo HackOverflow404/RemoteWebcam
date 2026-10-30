@@ -42,7 +42,7 @@ export default function AudioVolumeIndicator({ isEnabled, mediaStream }: { isEna
   if (!isEnabled) return null;
 
   return (
-    <div className="w-full flex items-center justify-center gap-2 px-5 my-8">
+    <div className="w-full flex items-center justify-center gap-2 px-5 my-2">
       <MdMic size={20} color="white" aria-hidden="true" />
       <div className="relative flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
         <div
