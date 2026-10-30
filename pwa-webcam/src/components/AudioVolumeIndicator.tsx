@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { MdMic } from "react-icons/md";
+import { getAudioContext } from "@/lib/audioContext";
 
 const SAMPLE_MS = 80;
 
@@ -10,19 +11,24 @@ export default function AudioVolumeIndicator({ isEnabled, mediaStream }: { isEna
     const track = mediaStream?.getAudioTracks()[0];
     if (!isEnabled || !track) return;
 
-    const Ctx = window.AudioContext ?? (window as any).webkitAudioContext;
-    if (!Ctx) return;
-    const ctx: AudioContext = new Ctx();
+    const ctx = getAudioContext();
+    if (!ctx) return;
     // Analyse only the audio track (and don't touch the stream's tracks on cleanup).
     const source = ctx.createMediaStreamSource(new MediaStream([track]));
     const analyser = ctx.createAnalyser();
-    analyser.fftSize = 512;
+    analyser.fftSize = 1024;
+    // Safari only processes nodes that lead to the destination; a dangling
+    // analyser reads silence forever. Route it there through a muted gain.
+    const mute = ctx.createGain();
+    mute.gain.value = 0;
     source.connect(analyser);
+    analyser.connect(mute);
+    mute.connect(ctx.destination);
     const samples = new Float32Array(analyser.fftSize);
 
-    // iOS keeps an AudioContext suspended until resumed inside a user
-    // gesture; resuming from a timer is ignored, leaving the meter at zero.
-    const resume = () => { if (ctx.state !== "running") void ctx.resume(); };
+    // Normally already running (unlocked by the "Start Stream" tap). If not,
+    // iOS only allows resuming inside a user gesture, so retry on the next tap.
+    const resume = () => { if (ctx.state !== "running") void ctx.resume().catch(() => {}); };
     resume();
     const gestures = ["pointerdown", "touchend", "click"] as const;
     gestures.forEach((g) => document.addEventListener(g, resume, { capture: true, passive: true }));
@@ -34,15 +40,19 @@ export default function AudioVolumeIndicator({ isEnabled, mediaStream }: { isEna
       let sum = 0;
       for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
       const rms = Math.sqrt(sum / samples.length);
-      const level = Math.min(1, rms * 4);
+      // dB scale: -60 dBFS (near silence) -> empty, 0 dBFS -> full.
+      const db = rms > 0 ? 20 * Math.log10(rms) : -Infinity;
+      const level = Math.max(0, Math.min(1, (db + 60) / 60));
       if (barRef.current) barRef.current.style.transform = `scaleX(${level})`;
     }, SAMPLE_MS);
 
     return () => {
       clearInterval(timer);
       gestures.forEach((g) => document.removeEventListener(g, resume, { capture: true }));
+      // The context is shared across pages; only detach this meter's nodes.
       source.disconnect();
-      void ctx.close();
+      analyser.disconnect();
+      mute.disconnect();
     };
   }, [isEnabled, mediaStream]);
 

@@ -5,6 +5,7 @@ import React, { useEffect, useState } from "react";
 import CopySessionStats from "@/components/CopySessionStats";
 import CodeInput from "@/components/CodeInput";
 import { validateCode, warmUpSignaling } from "@/lib/signaling";
+import { unlockAudioContext } from "@/lib/audioContext";
 
 export default function Home() {
   const router = useRouter();
@@ -28,6 +29,9 @@ export default function Home() {
 
   const handleStartStream = async () => {
     if (isLoading) return;
+    // Must run synchronously inside the tap: iOS only lets audio start from a
+    // user gesture, and the stream page's mic meter reuses this context.
+    unlockAudioContext();
     const joinedCode = code.join("").trim().toUpperCase();
 
     if (joinedCode.length !== 5) {
