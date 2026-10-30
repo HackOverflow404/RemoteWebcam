@@ -1,7 +1,7 @@
-import requests
-import shutil
-import subprocess
 import threading
+from pathlib import Path
+
+import numpy as np
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -15,94 +15,66 @@ from PySide6.QtWidgets import (
     QSystemTrayIcon,
     QMenu,
 )
-from PySide6.QtCore import Qt, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, Qt, Signal, Slot
 from PySide6.QtGui import QFont, QIcon, QImage, QPixmap
+
+import api
+from virtual_devices import VirtualCamThread, VirtualMicThread
 from webrtc_pipeline import WebRTCWorker, ConnectionState
-import numpy as np
-import cv2
+
+ASSETS = Path(__file__).resolve().parent / "assets"
 
 
-def _load_v4l2loopback() -> bool:
-    """
-    Ensure the v4l2loopback kernel module is loaded.
-    Tries sudo -n first (works if user has NOPASSWD for modprobe),
-    then pkexec (shows a graphical auth dialog on desktop Linux).
-    Returns True if the module is loaded/was already loaded.
-    """
-    try:
-        out = subprocess.check_output(["lsmod"], text=True, timeout=5)
-        if "v4l2loopback" in out:
-            print("[v4l2loopback] already loaded")
-            return True
-    except Exception:
-        pass
-
-    args = [
-        "modprobe", "v4l2loopback",
-        "devices=1", "video_nr=2",
-        "card_label=PixelStreamer",
-        "exclusive_caps=1",
-    ]
-
-    # Non-interactive sudo (works when the user has NOPASSWD for modprobe)
-    try:
-        r = subprocess.run(["sudo", "-n"] + args, timeout=5,
-                           capture_output=True)
-        if r.returncode == 0:
-            print("[v4l2loopback] loaded via sudo -n")
-            return True
-    except Exception:
-        pass
-
-    # pkexec — shows a native graphical auth dialog
-    if shutil.which("pkexec"):
-        try:
-            r = subprocess.run(["pkexec"] + args, timeout=60,
-                               capture_output=True)
-            if r.returncode == 0:
-                print("[v4l2loopback] loaded via pkexec")
-                return True
-        except Exception:
-            pass
-
-    print(
-        "[v4l2loopback] Could not auto-load.  Run manually:\n"
-        "  sudo modprobe v4l2loopback devices=1 video_nr=2 "
-        "card_label=PixelStreamer exclusive_caps=1"
-    )
-    return False
+class _Bridge(QObject):
+    """Carries results from background threads onto the GUI thread."""
+    preview = Signal(object)        # RGB ndarray or None
+    code_ready = Signal(str)
+    code_failed = Signal(str)
 
 
 class PixelStreamerApp(QMainWindow):
+    STATUS_COLORS = {
+        ConnectionState.WAITING: "#F39C12",
+        ConnectionState.CONNECTING: "#F39C12",
+        ConnectionState.CONNECTED: "#2ECC71",
+        ConnectionState.DISCONNECTED: "#E74C3C",
+        ConnectionState.FAILED: "#E74C3C",
+    }
+
     def __init__(self):
         super().__init__()
-        self._latest_frame = None
-        self._frame_timer = QTimer(self)
-        self._frame_timer.timeout.connect(self.render_latest_frame)
-        self._frame_timer.start(33)
-
         self.code = None
         self.worker = None
+        self._preview_image = None
+        self._shut_down = False
+
+        self._bridge = _Bridge()
+        self._bridge.preview.connect(self.on_preview)
+        self._bridge.code_ready.connect(self.on_code_ready)
+        self._bridge.code_failed.connect(self.on_code_failed)
+
         self.initUI()
 
-        # Load v4l2loopback in a background thread so the GUI stays responsive.
-        # If the user needs to authenticate via pkexec the dialog will appear
-        # on top of the main window a moment after launch.
-        threading.Thread(target=_load_v4l2loopback, daemon=True).start()
+        # Virtual devices live for the whole app session so other apps keep
+        # them selected across reconnects; between sessions they carry
+        # black video / silence.
+        self.cam = VirtualCamThread(on_preview=self._bridge.preview.emit)
+        self.mic = VirtualMicThread()
+        self.cam.start()
+        self.mic.start()
 
+    # ---------------- UI construction ----------------
     def initUI(self):
-        with open("./assets/style.qss", "r") as f:
-            self.setStyleSheet(f.read())
-
+        self.setStyleSheet((ASSETS / "style.qss").read_text())
         self.setWindowTitle("PixelStreamer")
+        self.setWindowIcon(QIcon(str(ASSETS / "icon.png")))
         self.setGeometry(100, 100, 256, 160)
-        self.font = QFont("Courier New")
+        self._font = QFont("Courier New")
 
         central_widget = QWidget()
         main_layout = QHBoxLayout()
         central_widget.setLayout(main_layout)
         self.setCentralWidget(central_widget)
-        self.create_tray_icon()
 
         sidebar = QWidget()
         sidebar_layout = QVBoxLayout()
@@ -112,29 +84,34 @@ class PixelStreamerApp(QMainWindow):
         sidebar.setLayout(sidebar_layout)
 
         title = QLabel("PixelStreamer")
-        title.setFont(self.font)
-        sidebar_layout.addWidget(title)
+        title.setFont(self._font)
         title.setObjectName("titleLabel")
+        sidebar_layout.addWidget(title)
 
-        self.buttons = ["Generate Code", "Hide Into Tray", "Webcam", "Microphone"]
-        self.button_widgets = {}
-
-        for i, label in enumerate(self.buttons):
+        def make_button(label, handler, checkable=False):
             button = QPushButton(label)
-            button.setFont(self.font)
+            button.setFont(self._font)
             button.setCursor(Qt.PointingHandCursor)
             button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            if i > 1:
+            if checkable:
                 button.setCheckable(True)
                 button.setChecked(True)
                 button.setEnabled(False)
-            button.clicked.connect(lambda checked, b=button: self.on_button_click(b))
+                button.toggled.connect(handler)
+            else:
+                button.clicked.connect(handler)
             sidebar_layout.addWidget(button)
-            self.button_widgets[label] = button
+            return button
+
+        self.code_button = make_button("Generate Code", self.on_code_button)
+        self.tray_button = make_button("Hide Into Tray", self.hide_to_tray)
+        self.cam_button = make_button("Webcam", self.on_cam_toggled, checkable=True)
+        self.mic_button = make_button("Microphone", self.on_mic_toggled, checkable=True)
 
         self.connection_status = QLabel("Connection: Not Connected")
-        self.connection_status.setFont(self.font)
+        self.connection_status.setFont(self._font)
         self.connection_status.setObjectName("connectionStatus")
+        self.connection_status.setWordWrap(True)
         sidebar_layout.addWidget(self.connection_status)
 
         sidebar_layout.addSpacerItem(
@@ -146,7 +123,7 @@ class PixelStreamerApp(QMainWindow):
         preview_container.setSpacing(20)
 
         preview_label = QLabel("Preview")
-        preview_label.setFont(self.font)
+        preview_label.setFont(self._font)
         preview_label.setAlignment(Qt.AlignLeft)
         preview_label.setObjectName("previewLabel")
 
@@ -157,15 +134,11 @@ class PixelStreamerApp(QMainWindow):
 
         self.video_label = QLabel()
         self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.video_label.setScaledContents(True)
+        self.video_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
 
-        # ADD IT TO THE PREVIEW FRAME
-
-        # Create a layout for the preview frame to hold the GStreamer video widget
-        self.preview_layout = QVBoxLayout()
-        self.preview_layout.addWidget(self.video_label)
-        self.preview_frame.setLayout(self.preview_layout)
+        preview_layout = QVBoxLayout()
+        preview_layout.addWidget(self.video_label)
+        self.preview_frame.setLayout(preview_layout)
 
         preview_container.addWidget(preview_label)
         preview_container.addWidget(self.preview_frame)
@@ -173,328 +146,226 @@ class PixelStreamerApp(QMainWindow):
         main_layout.addWidget(sidebar)
         main_layout.addLayout(preview_container)
 
-    def on_tray_activated(self, reason):
-        if reason == QSystemTrayIcon.Trigger:  # left click
-            self.show_main_window()
-    
+        self.create_tray_icon()
+
     def create_tray_icon(self):
         self.tray_icon = QSystemTrayIcon(self)
-        self.tray_icon.setIcon(QIcon("./assets/icon.png"))
+        self.tray_icon.setIcon(QIcon(str(ASSETS / "icon.png")))
 
-        tray_menu = QMenu()
-
-        # --- Code action (dynamic: "Generate Code" <-> actual code) ---
+        tray_menu = QMenu(self)
         self.tray_action_code = tray_menu.addAction("Generate Code")
-        self.tray_action_code.triggered.connect(self.on_tray_code_action)
-
+        self.tray_action_code.triggered.connect(self.on_code_button)
         tray_menu.addSeparator()
 
-        # --- Toggle Camera / Mic (checkable) ---
         self.tray_action_cam = tray_menu.addAction("Webcam")
         self.tray_action_cam.setCheckable(True)
-        self.tray_action_cam.toggled.connect(self.on_tray_toggle_cam)
+        self.tray_action_cam.toggled.connect(self.cam_button.setChecked)
 
         self.tray_action_mic = tray_menu.addAction("Microphone")
         self.tray_action_mic.setCheckable(True)
-        self.tray_action_mic.toggled.connect(self.on_tray_toggle_mic)
-
+        self.tray_action_mic.toggled.connect(self.mic_button.setChecked)
         tray_menu.addSeparator()
 
-        # --- Show / Quit ---
         tray_menu.addAction("Show", self.show_main_window)
         tray_menu.addAction("Quit", self.handle_quit)
 
         self.tray_icon.setContextMenu(tray_menu)
-        self.tray_icon.activated.connect(self.on_tray_activated)  # optional UX
+        self.tray_icon.activated.connect(self.on_tray_activated)
         self.tray_icon.show()
+        self.sync_tray_state()
 
+    # ---------------- tray / window ----------------
+    def on_tray_activated(self, reason):
+        if reason == QSystemTrayIcon.Trigger:
+            self.show_main_window()
 
     def show_main_window(self):
         self.show()
         self.raise_()
         self.activateWindow()
-    
+
+    def hide_to_tray(self):
+        self.sync_tray_state()
+        self.hide()
+        msg = f"Running in tray. Code: {self.code}" if self.code else "Running in tray."
+        self.tray_icon.showMessage("PixelStreamer", msg, QSystemTrayIcon.Information, 2000)
+
     def sync_tray_state(self):
-        # Code action text
-        if hasattr(self, "tray_action_code"):
-            if self.code and self.code != "Error":
-                self.tray_action_code.setText(self.code)
-            else:
-                self.tray_action_code.setText("Generate Code")
+        self.tray_action_code.setText(self.code_button.text())
+        self.tray_action_code.setEnabled(self.code_button.isEnabled())
+        for action, button in ((self.tray_action_cam, self.cam_button),
+                               (self.tray_action_mic, self.mic_button)):
+            action.blockSignals(True)
+            action.setChecked(button.isChecked())
+            action.setEnabled(button.isEnabled())
+            action.blockSignals(False)
 
-        # Sync toggle states from sidebar buttons
-        cam_btn = self.button_widgets.get("Webcam")
-        mic_btn = self.button_widgets.get("Microphone")
+    def set_status(self, text, color=None):
+        self.connection_status.setText(text)
+        self.connection_status.setStyleSheet(f"color: {color}" if color else "")
 
-        if hasattr(self, "tray_action_cam") and cam_btn and cam_btn.isCheckable():
-            self.tray_action_cam.blockSignals(True)
-            self.tray_action_cam.setChecked(cam_btn.isChecked())
-            self.tray_action_cam.setEnabled(cam_btn.isEnabled())
-            self.tray_action_cam.blockSignals(False)
-
-        if hasattr(self, "tray_action_mic") and mic_btn and mic_btn.isCheckable():
-            self.tray_action_mic.blockSignals(True)
-            self.tray_action_mic.setChecked(mic_btn.isChecked())
-            self.tray_action_mic.setEnabled(mic_btn.isEnabled())
-            self.tray_action_mic.blockSignals(False)
-    
-    def on_tray_code_action(self):
-        """
-        If no code: generate.
-        If code exists: delete + reset.
-        """
-        # Prefer to reuse the existing button logic so behavior stays consistent.
-        btn = self.button_widgets.get("Generate Code")
-
-        if self.code is None:
-            # Generate
-            if btn:
-                self.on_button_click(btn)
-            else:
-                # Fallback if you ever remove the button
-                QTimer.singleShot(0, lambda: self.handle_code_generation(btn))
-        else:
-            # Delete
-            if btn:
-                # Ensure the same UI flow as clicking the button with code text
-                btn.setText(self.code)
-                self.on_button_click(btn)
-            else:
-                QTimer.singleShot(0, lambda: self.handle_code_deletion(btn))
-
-
-    def on_tray_toggle_cam(self, checked: bool):
-        # Sync sidebar button state
-        btn = self.button_widgets.get("Webcam")
-        if btn and btn.isCheckable() and btn.isChecked() != checked:
-            btn.blockSignals(True)
-            btn.setChecked(checked)
-            btn.blockSignals(False)
-
-        # Call worker if available
-        if self.worker:
-            try:
-                self.worker.toggle_cam(checked)
-            except Exception as e:
-                print("toggle_cam failed:", e)
-
-    def on_tray_toggle_mic(self, checked: bool):
-        # Sync sidebar button state
-        btn = self.button_widgets.get("Microphone")
-        if btn and btn.isCheckable() and btn.isChecked() != checked:
-            btn.blockSignals(True)
-            btn.setChecked(checked)
-            btn.blockSignals(False)
-
-        # Call worker if available
-        if self.worker:
-            try:
-                self.worker.toggle_mic(checked)
-            except Exception as e:
-                print("toggle_mic failed:", e)
-
-    def on_button_click(self, button):
-        if button.text() == self.buttons[0] or button.text() == "Error":
-            button.setText("Generating...")
-            button.setEnabled(False)
-            QTimer.singleShot(100, lambda: self.handle_code_generation(button))
+    # ---------------- code lifecycle ----------------
+    def on_code_button(self):
+        if self.code:
+            self.end_session()
             return
-        if self.code and button.text() == self.code:
-            button.setText("Deleting...")
-            button.setEnabled(False)
-            QTimer.singleShot(100, lambda: self.handle_code_deletion(button))
+        if not self.code_button.isEnabled():
             return
-        if button.text() == self.buttons[1]:
-            self.sync_tray_state()
-            self.hide()
-
-            # optional toast
-            if self.code and self.code != "Error":
-                self.tray_icon.showMessage(
-                    "PixelStreamer",
-                    f"Running in tray. Code: {self.code}",
-                    QSystemTrayIcon.Information,
-                    2000,
-                )
-            else:
-                self.tray_icon.showMessage(
-                    "PixelStreamer",
-                    "Running in tray.",
-                    QSystemTrayIcon.Information,
-                    1500,
-                )
-            return
-        if button.text() == self.buttons[2]:
-            checked = button.isChecked()
-            if hasattr(self, "tray_action_cam") and self.tray_action_cam.isChecked() != checked:
-                self.tray_action_cam.blockSignals(True)
-                self.tray_action_cam.setChecked(checked)
-                self.tray_action_cam.blockSignals(False)
-            if self.worker:
-                self.worker.toggle_cam(checked)
-            return
-        if button.text() == self.buttons[3]:
-            checked = button.isChecked()
-            if hasattr(self, "tray_action_mic") and self.tray_action_mic.isChecked() != checked:
-                self.tray_action_mic.blockSignals(True)
-                self.tray_action_mic.setChecked(checked)
-                self.tray_action_mic.blockSignals(False)
-            if self.worker:
-                self.worker.toggle_mic(checked)
-            return
-
-    def handle_code_generation(self, button):
-        self.code = self.request_code()
-        button.setText(self.code)
-        button.setEnabled(True)
-        
-        if hasattr(self, "tray_action_code"):
-            self.tray_action_code.setText(self.code if self.code != "Error" else "Generate Code")
-        
-        if self.code != "Error":
-            self.worker = WebRTCWorker(code=self.code)
-            self.worker.mic_status_changed.connect(self.on_mic_status)
-            self.worker.vid_status_changed.connect(self.on_vid_status)
-            self.worker.connection_state_changed.connect(self.on_connection_status)
-            self.worker.video_frame_received.connect(self.on_frame)
-            self.worker.start()
-
-    def request_code(self):
-        try:
-            response = requests.post(
-                "https://generatecode-qaf2yvcrrq-uc.a.run.app",
-                timeout=5
-            )
-            response.raise_for_status()
-            return response.json()["code"]
-        except Exception as e:
-            print(f"Failed to generate code: {e}")
-            return "Error"
-
-    @Slot(object)
-    def on_mic_status(self, state):
-        self.button_widgets.get("Microphone").setChecked(True if state == "on" else False)
+        self.code_button.setText("Generating...")
+        self.code_button.setEnabled(False)
         self.sync_tray_state()
-        
-    
-    @Slot(object)
-    def on_vid_status(self, state):
-        self.button_widgets.get("Webcam").setChecked(True if state == "on" else False)
+
+        def work():
+            try:
+                self._bridge.code_ready.emit(api.generate_code())
+            except Exception as e:
+                print(f"Failed to generate code: {e!r}")
+                self._bridge.code_failed.emit(str(e))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    @Slot(str)
+    def on_code_ready(self, code):
+        self.code = code
+        self.code_button.setText(code)
+        self.code_button.setEnabled(True)
+        self.code_button.setToolTip("Click to cancel this code")
+
+        worker = WebRTCWorker(code=code, cam=self.cam, mic=self.mic)
+        # Bind every signal to this worker instance so late signals from an
+        # old session can never affect a newer one.
+        worker.state_changed.connect(lambda s, w=worker: self.on_connection_state(w, s))
+        worker.failed.connect(lambda msg, w=worker: self.on_session_failed(w, msg))
+        worker.remote_toggle.connect(lambda d, v, w=worker: self.on_remote_toggle(w, d, v))
+        self.worker = worker
+        worker.start()
         self.sync_tray_state()
-    
-    @Slot(object)
-    def on_connection_status(self, state):
-        color_map = {
-            ConnectionState.CONNECTED: "#2ECC71",
-            ConnectionState.CONNECTING: "#F39C12",
-            ConnectionState.DISCONNECTED: "#E74C3C",
-            ConnectionState.FAILED: "#E74C3C",
-        }
 
-        if state == ConnectionState.DISCONNECTED:
-            self.reset_session_ui()
-        elif state == ConnectionState.CONNECTED:
-            self.button_widgets.get("Microphone").setEnabled(True)
-            self.button_widgets.get("Webcam").setEnabled(True)
-        
-        self.connection_status.setText(f"Connection: {state.value.capitalize()}")
-        self.connection_status.setStyleSheet(f"color: {color_map[state]}")
-        
+    @Slot(str)
+    def on_code_failed(self, _msg):
+        self.code_button.setText("Generate Code")
+        self.code_button.setEnabled(True)
+        self.set_status("Could not reach server. Check your connection and retry.", "#E74C3C")
+        self.sync_tray_state()
 
-    @Slot(object)
-    def on_frame(self, frame: np.ndarray):
-        if frame is None:
-            return
-        self._latest_frame = frame
+    def end_session(self, status_text="Connection: Not Connected", color=None):
+        """Stop the current worker, delete its code, and reset the UI."""
+        worker, self.worker = self.worker, None
+        code, self.code = self.code, None
+        if worker:
+            worker.stop()
+        if code:
+            threading.Thread(target=self._delete_code_quietly, args=(code,), daemon=True).start()
 
-    def render_latest_frame(self):
-        frame = self._latest_frame
-        if frame is None:
-            return
-
-        # Optional: clear so we don't re-render the same frame
-        self._latest_frame = None
-
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        rgb = np.ascontiguousarray(rgb)
-
-        h, w, ch = rgb.shape
-        bytes_per_line = ch * w
-
-        image = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
-        self.video_label.setPixmap(QPixmap.fromImage(image))
-
-
-    def stop_worker(self):
-        """Stop and fully tear down the current worker, if any."""
-        w = self.worker
-        if not w:
-            return
-
-        try:
-            w.video_frame_received.disconnect(self.on_frame)
-        except Exception:
-            pass
-
-        try:
-            QTimer.singleShot(0, w.stop)
-        except Exception as e:
-            print("worker.stop() failed:", e)
-
-        self.worker = None
-
-    def reset_session_ui(self):
-        if not self.worker and not self.code:
-            return
-
-        self.stop_worker()
-        self.delete_code()
-
-        btn = self.button_widgets.get("Generate Code")
-        if btn:
-            btn.setText("Generate Code")
-            btn.setEnabled(True)
-        
-        self.button_widgets.get("Microphone").setChecked(True)
-        self.button_widgets.get("Webcam").setChecked(True)
-        self.button_widgets.get("Microphone").setEnabled(False)
-        self.button_widgets.get("Webcam").setEnabled(False)
-
-        if hasattr(self, "tray_action_code"):
-            self.tray_action_code.setText("Generate Code")
-
+        self.code_button.setText("Generate Code")
+        self.code_button.setEnabled(True)
+        self.code_button.setToolTip("")
+        for button in (self.cam_button, self.mic_button):
+            button.blockSignals(True)
+            button.setChecked(True)
+            button.setEnabled(False)
+            button.blockSignals(False)
         self.video_label.clear()
-        self.code = None
+        self._preview_image = None
+        self.set_status(status_text, color)
+        self.sync_tray_state()
 
-    def handle_code_deletion(self, button):
-        self.stop_worker()
-        self.delete_code()
-        
-        if hasattr(self, "tray_action_code"):
-            self.tray_action_code.setText("Generate Code")
-
-        button.setText(self.buttons[0])
-        button.setEnabled(True)
-
-    def delete_code(self):
+    @staticmethod
+    def _delete_code_quietly(code, quick=False):
         try:
-            if self.code is None:
-                return
-
-            requests.post(
-                "https://deletecode-qaf2yvcrrq-uc.a.run.app", json={"code": self.code},
-                timeout=5
-            )
-            self.code = None
+            api.delete_code(code, attempts=1 if quick else 3)
         except Exception as e:
-            print(f"Failed to delete code: {e}")
+            print(f"Failed to delete code {code}: {e!r}")
+
+    # ---------------- worker signals ----------------
+    def on_connection_state(self, worker, state):
+        if worker is not self.worker:
+            return
+        color = self.STATUS_COLORS[state]
+        if state == ConnectionState.DISCONNECTED:
+            self.end_session("Connection: Disconnected", color)
+            return
+        if state == ConnectionState.FAILED:
+            return  # on_session_failed carries the reason and resets the UI
+        if state == ConnectionState.CONNECTED:
+            self.cam_button.setEnabled(True)
+            self.mic_button.setEnabled(True)
+            self.sync_tray_state()
+        self.set_status(f"Connection: {state.value.capitalize()}", color)
+
+    def on_session_failed(self, worker, message):
+        if worker is not self.worker:
+            return
+        self.end_session(f"Connection failed: {message}", self.STATUS_COLORS[ConnectionState.FAILED])
+
+    def on_remote_toggle(self, worker, device, value):
+        if worker is not self.worker:
+            return
+        on = value == "on"
+        targets = {"mic": [self.mic_button], "cam": [self.cam_button],
+                   "media": [self.mic_button, self.cam_button]}[device]
+        for button in targets:
+            # The phone already applied this change; don't echo it back.
+            button.blockSignals(True)
+            button.setChecked(on)
+            button.blockSignals(False)
+        self.sync_tray_state()
+
+    def on_cam_toggled(self, checked):
+        if self.worker:
+            self.worker.toggle_cam(checked)
+        self.sync_tray_state()
+
+    def on_mic_toggled(self, checked):
+        if self.worker:
+            self.worker.toggle_mic(checked)
+        self.sync_tray_state()
+
+    # ---------------- preview ----------------
+    @Slot(object)
+    def on_preview(self, rgb):
+        if rgb is None or not self.worker:
+            self.video_label.clear()
+            self._preview_image = None
+            return
+        rgb = np.ascontiguousarray(rgb)
+        h, w, _ = rgb.shape
+        self._preview_image = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888).copy()
+        self._render_preview()
+
+    def _render_preview(self):
+        if self._preview_image is None:
+            return
+        self.video_label.setPixmap(QPixmap.fromImage(self._preview_image).scaled(
+            self.video_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._render_preview()
+
+    # ---------------- exit ----------------
+    def shutdown(self):
+        """Idempotent: runs from closeEvent, Quit, aboutToQuit or SIGINT."""
+        if self._shut_down:
+            return
+        self._shut_down = True
+        worker, self.worker = self.worker, None
+        if worker:
+            worker.stop(wait=True, timeout=2)
+        if self.code:
+            self._delete_code_quietly(self.code, quick=True)
+            self.code = None
+        self.cam.stop()
+        self.mic.stop()
+        self.cam.join(2)
+        self.mic.join(3)  # removes the PipeWire virtual mic modules
+        self.tray_icon.hide()
 
     def handle_quit(self):
-        self.stop_worker()
-        self.delete_code()
+        self.shutdown()
         QApplication.quit()
-    
+
     def closeEvent(self, event):
-        self.stop_worker()
-        self.delete_code()
+        self.shutdown()
         event.accept()
+        QApplication.quit()
