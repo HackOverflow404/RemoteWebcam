@@ -58,53 +58,63 @@ export default function Home() {
     }
   };
 
+  // Portrait: one column. Landscape: code entry on the left, options and
+  // Start on the right, so everything fits a phone held sideways. The page
+  // scrolls if it still doesn't fit (e.g. with the keyboard open).
   return (
-    <section className="flex flex-col w-screen items-center">
-      <h1 className="my-10 text-5xl" aria-label="PixelStreamer">
-        PixelStreamer
-      </h1>
-      <h2 className="my-5 text-4xl" aria-label="Enter Code">
-        Enter Code:
-      </h2>
-      <CodeInput code={code} setCode={setCode} onSubmit={handleStartStream} />
-      {error && (
-        <p role="alert" className="w-9/10 text-center text-red-400 text-lg">
-          {error}
-        </p>
-      )}
-      <button
-        className={`w-9/10 my-5 px-5 py-5 rounded-2xl text-3xl text-center ${
-          streams.webcam
-            ? "bg-blue-500 text-white hover:bg-blue-700"
-            : "bg-white text-blue-500 hover:bg-gray-100"
-        }`}
-        onClick={toggleWebcam}
-        aria-label="Toggle Webcam"
-      >
-        Stream Webcam
-      </button>
-      <button
-        className={`w-9/10 my-5 px-5 py-5 rounded-2xl text-3xl text-center ${
-          streams.mic
-            ? "bg-blue-500 text-white hover:bg-blue-700"
-            : "bg-white text-blue-500 hover:bg-gray-100"
-        }`}
-        onClick={toggleMic}
-        aria-label="Toggle Microphone"
-      >
-        Stream Microphone
-      </button>
-      <button
-        onClick={handleStartStream}
-        disabled={isLoading}
-        className={`w-9/10 my-5 px-5 py-5 rounded-2xl text-4xl text-center ${
-          isLoading ? "bg-gray-400" : "bg-green-600 hover:bg-green-700"
-        } text-white`}
-        aria-label="Start Stream"
-      >
-        {isLoading ? "Connecting..." : "Start Stream"}
-      </button>
-      <CopySessionStats />
+    <section className="home-page h-full w-full overflow-y-auto">
+      <div className="min-h-full w-full flex flex-col landscape:flex-row items-center justify-center landscape:gap-8 px-[5%] py-6 landscape:py-3">
+        <div className="w-full max-w-md flex flex-col items-center">
+          <h1 className="my-10 landscape:my-2 text-5xl landscape:text-3xl" aria-label="PixelStreamer">
+            PixelStreamer
+          </h1>
+          <h2 className="my-5 landscape:my-2 text-4xl landscape:text-2xl" aria-label="Enter Code">
+            Enter Code:
+          </h2>
+          <CodeInput code={code} setCode={setCode} onSubmit={handleStartStream} />
+          {error && (
+            <p role="alert" className="w-full text-center text-red-400 text-lg landscape:text-base">
+              {error}
+            </p>
+          )}
+        </div>
+
+        <div className="w-full max-w-md flex flex-col items-center gap-10 landscape:gap-3 mt-5 landscape:mt-0">
+          <button
+            className={`w-full px-5 py-5 landscape:py-3 rounded-2xl text-3xl landscape:text-xl text-center ${
+              streams.webcam
+                ? "bg-blue-500 text-white hover:bg-blue-700"
+                : "bg-white text-blue-500 hover:bg-gray-100"
+            }`}
+            onClick={toggleWebcam}
+            aria-label="Toggle Webcam"
+          >
+            Stream Webcam
+          </button>
+          <button
+            className={`w-full px-5 py-5 landscape:py-3 rounded-2xl text-3xl landscape:text-xl text-center ${
+              streams.mic
+                ? "bg-blue-500 text-white hover:bg-blue-700"
+                : "bg-white text-blue-500 hover:bg-gray-100"
+            }`}
+            onClick={toggleMic}
+            aria-label="Toggle Microphone"
+          >
+            Stream Microphone
+          </button>
+          <button
+            onClick={handleStartStream}
+            disabled={isLoading}
+            className={`w-full px-5 py-5 landscape:py-3 rounded-2xl text-4xl landscape:text-2xl text-center ${
+              isLoading ? "bg-gray-400" : "bg-green-600 hover:bg-green-700"
+            } text-white`}
+            aria-label="Start Stream"
+          >
+            {isLoading ? "Connecting..." : "Start Stream"}
+          </button>
+          <CopySessionStats />
+        </div>
+      </div>
     </section>
   );
 }

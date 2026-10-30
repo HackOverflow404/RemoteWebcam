@@ -62,7 +62,7 @@ export default function CodeInput({ code, setCode, onSubmit }: CodeInputProps) {
     };
 
     return (
-        <div className="w-screen mb-5 flex justify-evenly">
+        <div className="w-full mb-5 landscape:mb-3 flex justify-between gap-2">
             {code.map((char, index) => (
                 <input
                     key={index}
@@ -79,7 +79,7 @@ export default function CodeInput({ code, setCode, onSubmit }: CodeInputProps) {
                     onPaste={(e) => handlePaste(index, e)}
                     onFocus={(e) => e.target.select()}
                     aria-label={`Code character ${index + 1}`}
-                    className="w-15 h-25 bg-gray-400 rounded-2xl text-center text-black text-4xl font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-15 h-25 landscape:w-12 landscape:h-16 landscape:text-3xl bg-gray-400 rounded-2xl text-center text-black text-4xl font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
             ))}
         </div>
