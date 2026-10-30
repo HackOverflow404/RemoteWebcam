@@ -5,6 +5,7 @@ import {
 } from "@/lib/videoTransforms";
 
 import { startSessionStats } from "@/lib/webrtcSessionStats";
+import { getIceServers, submitOffer, waitForAnswer } from "@/lib/signaling";
 
 export type ConnectionState =
   | "connecting"
@@ -24,6 +25,18 @@ const getOutputDims = (resolution: string) => {
   return { w: 1280, h: 720 };
 };
 
+// The desktop (aiortc) can't trickle ICE, so the offer has to carry its
+// candidates. Waiting for gathering to fully complete can take many seconds
+// (every TURN transport, STUN probes on interfaces without internet), so send
+// the offer once we have the best candidate type available — relay when a
+// TURN server is configured, otherwise server-reflexive — plus a short grace
+// for stragglers, or at the cap.
+const ICE_GATHER_CAP_MS = 3000;
+const ICE_GRACE_MS = 250;
+// A "disconnected" peer often recovers on its own (Wi-Fi roam, brief loss).
+const DISCONNECT_GRACE_MS = 10_000;
+const MAX_VIDEO_BITRATE = 8_000_000;
+
 export interface UseWebRTCStreamProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   media: MediaStream | null;
@@ -41,6 +54,52 @@ export interface UseWebRTCStreamProps {
   handleRemoteTermination: (remoteTermination: boolean) => void;
 }
 
+function waitForIceCandidates(
+  pc: RTCPeerConnection,
+  hasTurn: boolean,
+  signal: AbortSignal
+): Promise<void> {
+  const target = hasTurn ? "relay" : "srflx";
+  return new Promise((resolve) => {
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    const done = () => {
+      clearTimeout(capTimer);
+      clearTimeout(graceTimer);
+      pc.removeEventListener("icegatheringstatechange", onState);
+      pc.removeEventListener("icecandidate", onCandidate);
+      signal.removeEventListener("abort", done);
+      resolve();
+    };
+    const onState = () => { if (pc.iceGatheringState === "complete") done(); };
+    const onCandidate = (e: RTCPeerConnectionIceEvent) => {
+      if (!e.candidate) return done();
+      if (e.candidate.type === target && !graceTimer) {
+        graceTimer = setTimeout(done, ICE_GRACE_MS);
+      }
+    };
+    const capTimer = setTimeout(done, ICE_GATHER_CAP_MS);
+    if (pc.iceGatheringState === "complete") return done();
+    pc.addEventListener("icegatheringstatechange", onState);
+    pc.addEventListener("icecandidate", onCandidate);
+    signal.addEventListener("abort", done);
+  });
+}
+
+// aiortc decodes VP8 and H.264; prefer H.264 so iPhones use the hardware encoder.
+function preferH264(transceiver: RTCRtpTransceiver) {
+  const caps =
+    RTCRtpReceiver.getCapabilities?.("video") ?? RTCRtpSender.getCapabilities?.("video");
+  if (!caps || typeof transceiver.setCodecPreferences !== "function") return;
+  const rank = (c: RTCRtpCodec) =>
+    /h264/i.test(c.mimeType) ? 0 : /vp8/i.test(c.mimeType) ? 1 : 2;
+  const sorted = [...caps.codecs].sort((a, b) => rank(a) - rank(b));
+  try {
+    transceiver.setCodecPreferences(sorted);
+  } catch (e) {
+    console.warn("[useWebRTCStream] setCodecPreferences failed:", e);
+  }
+}
+
 export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
   const propsRef = useRef(initialProps);
   useEffect(() => {
@@ -52,12 +111,13 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
   const rotationRef = useRef<number>(0);
   const dcRef = useRef<RTCDataChannel | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const disconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const processedVideoRef = useRef<ProcessedTrack | null>(null);
   const outDimsRef = useRef<{ w: number; h: number } | null>(null);
-  const sourceVideoTrackRef = useRef<MediaStreamTrack | null>(null);
   const sessionStatsRef = useRef<ReturnType<typeof startSessionStats> | null>(null);
   const wakeLock = useRef<WakeLockSentinel | null>(null);
-  
+
   const [status, setStatus] = useState<ConnectionState>("disconnected");
   const [error, setError] = useState<string | null>(null);
   const [on, setOn] = useState(false);
@@ -99,7 +159,7 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     }
   }, []);
 
-  // Called by the gyro detector in stream/page.tsx whenever the physical
+  // Called by the orientation detector in stream/page.tsx whenever the
   // device angle changes. Updates the canvas correction in real-time so
   // the stream stays correctly oriented without renegotiating WebRTC.
   const handleRotate = useCallback((rot: number) => {
@@ -107,48 +167,60 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     processedVideoRef.current?.setRotation(rot);
   }, []);
 
+  const requestWakeLock = useCallback(async () => {
+    if (!("wakeLock" in navigator) || document.visibilityState !== "visible") return;
+    if (wakeLock.current && !wakeLock.current.released) return;
+    try {
+      wakeLock.current = await navigator.wakeLock.request("screen");
+    } catch (err) {
+      log("wakeLock request failed:", err);
+    }
+  }, []);
+
   const cleanup = useCallback(
-    async (reason?: string) => {
+    (reason?: string, errorMessage?: string) => {
       log("cleanup()", reason ?? "");
       sessionStatsRef.current?.stop(reason);
       sessionStatsRef.current = null;
 
-      if (reason !== "remote-linux-termination") {
-        if (dcRef.current?.readyState === "open") {
-          dcRef.current.send(
-            JSON.stringify({ type: "terminate", source: "pwa" })
-          );
-        }
+      abortRef.current?.abort();
+      abortRef.current = null;
+      if (disconnectTimerRef.current) {
+        clearTimeout(disconnectTimerRef.current);
+        disconnectTimerRef.current = null;
       }
 
+      const dc = dcRef.current;
+      if (reason !== "remote-linux-termination" && dc?.readyState === "open") {
+        try {
+          dc.send(JSON.stringify({ type: "terminate", source: "pwa" }));
+        } catch {}
+      }
       dcRef.current = null;
       startedRef.current = false;
       outDimsRef.current = null;
 
-      if (peerRef.current) {
-        peerRef.current.onconnectionstatechange = null;
-        try {
-          peerRef.current.close();
-        } catch {}
-        peerRef.current = null;
+      const pc = peerRef.current;
+      peerRef.current = null;
+      if (pc) {
+        pc.onconnectionstatechange = null;
+        // Give the terminate message a moment to leave before closing.
+        const close = () => { try { pc.close(); } catch {} };
+        if (dc?.readyState === "open" && reason !== "pagehide") setTimeout(close, 100);
+        else close();
       }
 
-      if (wakeLock.current) {
-        try {
-          await wakeLock.current.release();
-          wakeLock.current = null;
-        } catch (err: any) {
-          log(`${err.name}: ${err.message}`);
-        }
-      }
+      wakeLock.current?.release().catch(() => {});
+      wakeLock.current = null;
 
       cleanupProcessedVideo();
-      sourceVideoTrackRef.current = null;
 
+      if (!mountedRef.current) return;
       setOn(false);
-      setStatus("disconnected");
+      setStatus(errorMessage ? "error" : "disconnected");
+      if (errorMessage) setError(errorMessage);
 
-      if (reason == "remote-linux-termination") {
+      if (reason === "remote-linux-termination") {
         propsRef.current.handleRemoteTermination(true);
       }
     },
@@ -156,46 +228,32 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
   );
 
   useEffect(() => {
-    return () => {
-      mountedRef.current = false;
-      void cleanup("unmount");
+    mountedRef.current = true; // StrictMode re-mounts reuse refs
+    // Tell the desktop right away when the tab/app is closed, rather than
+    // leaving it to notice ~30 s later via ICE consent timeouts.
+    const onPageHide = () => { if (peerRef.current) cleanup("pagehide"); };
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && peerRef.current) void requestWakeLock();
     };
-  // cleanup is stable (its deps never change), but omit from deps so this
-  // effect runs only on unmount and never re-registers on re-render.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    window.addEventListener("pagehide", onPageHide);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("pagehide", onPageHide);
+      document.removeEventListener("visibilitychange", onVisible);
+      mountedRef.current = false;
+      cleanup("unmount");
+    };
+  }, [cleanup, requestWakeLock]);
 
-  const relayToggle = (trigger: "mic" | "cam" | "media", state: MediaState) => {
-    if (dcRef.current) {
-      switch (trigger) {
-        case "mic":
-          dcRef.current.send(JSON.stringify({"type": "toggle", device: "mic", "value": state, "source": "pwa"}));
-          break;
-        case "cam":
-          dcRef.current.send(JSON.stringify({"type": "toggle", device: "cam", "value": state, "source": "pwa"}));
-          break;
-        case "media":
-          dcRef.current.send(JSON.stringify({"type": "toggle", device: "media", "value": state, "source": "pwa"}));
-          break;
-        default:
-          log("relayToggle()", "unknown trigger source");
-          break;
-      };
+  const relayToggle = useCallback((trigger: "mic" | "cam" | "media", state: MediaState) => {
+    const dc = dcRef.current;
+    if (dc?.readyState !== "open") return;
+    try {
+      dc.send(JSON.stringify({ type: "toggle", device: trigger, value: state, source: "pwa" }));
+    } catch (e) {
+      log("relayToggle() failed:", e);
     }
-  }
-
-  const fetchIceServers = async () => {
-    const resp = await fetch(
-      "https://getturncredentials-qaf2yvcrrq-uc.a.run.app",
-      { method: "POST" }
-    );
-    const raw = await resp.json();
-    return raw.map((s: any) => ({
-      urls: s.urls ?? s.url,
-      username: s.username,
-      credential: s.credential,
-    }));
-  }
+  }, []);
 
   const startStream = useCallback(async () => {
     if (startedRef.current || peerRef.current) {
@@ -211,179 +269,118 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
     }
 
     startedRef.current = true;
+    const abort = new AbortController();
+    abortRef.current = abort;
     setStatus("connecting");
     setError(null);
+    void requestWakeLock();
 
     try {
-      const iceServers = await fetchIceServers();
-      if (!mountedRef.current) return;
+      const iceServers = await getIceServers();
+      if (abort.signal.aborted) return;
 
-      const pc = new RTCPeerConnection({ iceServers });
+      const pc = new RTCPeerConnection({ iceServers, bundlePolicy: "max-bundle" });
       peerRef.current = pc;
       sessionStatsRef.current = startSessionStats(pc);
 
       pc.onconnectionstatechange = () => {
         log("connectionState →", pc.connectionState);
+        if (peerRef.current !== pc) return;
 
-        if (pc.connectionState === "connected") {
-          sessionStatsRef.current?.markConnected();
-          setStatus("connected");
-          setOn(true);
-          // Push for high bitrate now that the connection is live
-          pc.getSenders().forEach((sender) => {
-            if (sender.track?.kind !== "video") return;
-            const params = sender.getParameters();
-            if (!params.encodings || params.encodings.length === 0) {
-              params.encodings = [{}];
-            }
-            params.encodings[0].maxBitrate = 8_000_000; // 8 Mbps
-            sender.setParameters(params).catch(() => {});
-          });
-          return;
+        if (disconnectTimerRef.current) {
+          clearTimeout(disconnectTimerRef.current);
+          disconnectTimerRef.current = null;
         }
 
-        if (
-          pc.connectionState === "failed" ||
-          pc.connectionState === "closed"
-        ) {
-          setError("WebRTC connection failed");
-          cleanup("pc failed/closed");
+        switch (pc.connectionState) {
+          case "connected":
+            sessionStatsRef.current?.markConnected();
+            setStatus("connected");
+            setOn(true);
+            pc.getSenders().forEach((sender) => {
+              if (sender.track?.kind !== "video") return;
+              const params = sender.getParameters();
+              if (!params.encodings || params.encodings.length === 0) {
+                params.encodings = [{}];
+              }
+              params.encodings[0].maxBitrate = MAX_VIDEO_BITRATE;
+              params.encodings[0].maxFramerate = propsRef.current.fps;
+              sender.setParameters(params).catch(() => {});
+            });
+            break;
+          case "disconnected":
+            setStatus("connecting");
+            disconnectTimerRef.current = setTimeout(() => {
+              if (peerRef.current === pc && pc.connectionState !== "connected") {
+                cleanup("disconnect timeout", "Connection lost");
+              }
+            }, DISCONNECT_GRACE_MS);
+            break;
+          case "failed":
+            cleanup("pc failed", "Connection failed. Check that both devices are online.");
+            break;
+          case "closed":
+            cleanup("pc closed");
+            break;
         }
       };
 
       const dc = pc.createDataChannel("chat");
-      dc.onopen = () => {
-        dc.send("Hello from JS!");
-        const { resolution } = propsRef.current;
-        const { w, h } = getOutputDims(resolution);
-        dc.send(JSON.stringify({ type: "dimensions", width: w, height: h }));
-      };
       dc.onmessage = (e) => {
+        let msg: { type?: string; source?: string; value?: unknown };
         try {
-          const msg = JSON.parse(e.data);
-          console.log("Message received: ", msg);
-          console.log("[dc] msg at", performance.now());
-
-          if (msg.type === "toggle_mic" && msg.source === "linux") {
-            if (propsRef.current.isMicOn !== msg.value.toLowerCase()) {
-              console.log("Linux toggled mic");
-              propsRef.current.toggleMic();
-            }
-          }
-          
-          if (msg.type === "toggle_cam" && msg.source === "linux") {
-            if (propsRef.current.isVidOn !== msg.value.toLowerCase()) {
-              console.log("Linux toggled cam");
-              propsRef.current.toggleVid();
-            }
-          }
-          
-          if (msg.type === "terminate" && msg.source === "linux") {
-            console.log("Linux terminated session");
-            cleanup("remote-linux-termination");
-          }
+          msg = JSON.parse(e.data);
         } catch {
-          console.log("DataChannel message:", e.data);
+          return;
+        }
+        if (msg.source !== "linux") return;
+        const value = typeof msg.value === "string" ? msg.value.toLowerCase() : null;
+
+        if (msg.type === "toggle_mic" && value && propsRef.current.isMicOn !== value) {
+          propsRef.current.toggleMic();
+        } else if (msg.type === "toggle_cam" && value && propsRef.current.isVidOn !== value) {
+          propsRef.current.toggleVid();
+        } else if (msg.type === "terminate") {
+          log("Linux terminated session");
+          cleanup("remote-linux-termination");
         }
       };
       dcRef.current = dc;
 
       media.getTracks().forEach((track) => {
         if (track.kind === "video") {
-          sourceVideoTrackRef.current = track;
           cleanupProcessedVideo();
-
           const processed = buildProcessed(track);
           processedVideoRef.current = processed;
-
-          pc.addTrack(processed.track, new MediaStream([processed.track]));
+          const t = pc.addTransceiver(processed.track, {
+            direction: "sendonly",
+            streams: [new MediaStream([processed.track])],
+          });
+          preferH264(t);
         } else {
-          pc.addTrack(track, media);
-        }
-      });
-
-      
-      // Prefer VP9 or H.264 for better compression and quality
-      pc.getTransceivers().forEach((t) => {
-        if (t.sender.track?.kind !== "video") return;
-        const caps = RTCRtpSender.getCapabilities?.("video");
-        if (!caps) return;
-        const preferred = caps.codecs.filter((c) =>
-          /vp9|h264/i.test(c.mimeType)
-        );
-        if (preferred.length > 0) {
-          try {
-            t.setCodecPreferences([
-              ...preferred,
-              ...caps.codecs.filter((c) => !preferred.includes(c)),
-            ]);
-          } catch {}
+          pc.addTransceiver(track, { direction: "sendonly", streams: [media] });
         }
       });
 
       await pc.setLocalDescription(await pc.createOffer());
-      if (!mountedRef.current) return;
+      const hasTurn = iceServers.some((s) =>
+        [s.urls].flat().some((u) => /^turns?:/i.test(u))
+      );
+      await waitForIceCandidates(pc, hasTurn, abort.signal);
+      if (abort.signal.aborted) return;
 
-      await new Promise<void>((resolve) => {
-        if (pc.iceGatheringState === "complete") return resolve();
-        pc.onicegatheringstatechange = () => {
-          if (pc.iceGatheringState === "complete") resolve();
-        };
-      });
-      if (!mountedRef.current) return;
-
-      await fetch("https://submitoffer-qaf2yvcrrq-uc.a.run.app", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          code: sessionCode,
-          offer: pc.localDescription,
-        }),
-      });
-
-      // Poll for answer
-      let answer: RTCSessionDescriptionInit | null = null;
-      while (!answer) {
-        if (!mountedRef.current) return;
-
-        const resp = await fetch(
-          "https://checkanswer-qaf2yvcrrq-uc.a.run.app",
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ code: sessionCode }),
-          }
-        );
-
-        if (resp.status === 200) {
-          const data = await resp.json();
-          answer = data.answer;
-        } else {
-          await new Promise((r) => setTimeout(r, 1000));
-          if (!mountedRef.current) return;
-        }
-      }
-      if (!mountedRef.current) return;
+      await submitOffer(sessionCode, pc.localDescription!, abort.signal);
+      const answer = await waitForAnswer(sessionCode, { signal: abort.signal });
+      if (abort.signal.aborted) return;
 
       await pc.setRemoteDescription(answer);
-      if (!mountedRef.current) return;
-      
-      try {
-        wakeLock.current = await navigator.wakeLock.request('screen');
-        wakeLock.current.addEventListener('release', () => {
-          console.log('Wake Lock was released');
-        });
-      console.log('Wake Lock is active');
-      } catch (error) {
-        log("startStream() wakeLock failed");
-      }
-      log("WebRTC fully established");
+      log("WebRTC signaling complete");
     } catch (e: any) {
+      if (abort.signal.aborted) return;
       console.error("WebRTC error:", e);
-      setError(e.message || "WebRTC error");
-      cleanup("exception");
+      cleanup("exception", e?.message || "WebRTC error");
     }
-  }, [cleanup, buildProcessed, cleanupProcessedVideo]);
+  }, [cleanup, buildProcessed, cleanupProcessedVideo, requestWakeLock]);
 
   const stopStream = useCallback(() => {
     log("stopStream()");
@@ -395,24 +392,23 @@ export default function useWebRTCStream(initialProps: UseWebRTCStreamProps) {
       const pc = peerRef.current;
       if (!pc) return;
 
-      const sender = pc.getSenders().find((s) => s.track?.kind === kind);
+      const transceiver = pc
+        .getTransceivers()
+        .find((t) => t.receiver.track?.kind === kind);
+      const sender = transceiver?.sender;
       if (!sender) return;
 
       if (kind === "video") {
-        cleanupProcessedVideo();
-
+        const old = processedVideoRef.current;
         if (!track) {
-          sourceVideoTrackRef.current = null;
           await sender.replaceTrack(null);
+          cleanupProcessedVideo();
           return;
         }
-
-        sourceVideoTrackRef.current = track;
-
         const processed = buildProcessed(track);
         processedVideoRef.current = processed;
-
         await sender.replaceTrack(processed.track);
+        old?.stop(); // swap first, then stop, so the sender never goes blank
         return;
       }
 

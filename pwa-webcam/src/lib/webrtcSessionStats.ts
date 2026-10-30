@@ -9,30 +9,48 @@ type SessionLog = {
   [key: string]: unknown;
 };
 let memoryLogs: SessionLog[] = [];
+let loadedFromStorage = false;
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+// Batch writes: re-serialising up to MAX_LOGS entries every second ran on
+// the main thread alongside the video pipeline and caused frame drops.
+const FLUSH_DELAY_MS = 5000;
 
-function readLogs(): SessionLog[] {
+function readStoredLogs(): SessionLog[] {
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
-    if (Array.isArray(parsed)) {
-      const saved = parsed.filter((entry): entry is SessionLog =>
-        entry !== null && typeof entry === "object" &&
-        typeof entry.pageId === "string" && typeof entry.sessionId === "number" &&
-        typeof entry.event === "string"
-      );
-      const merged = new Map<string, SessionLog>();
-      for (const entry of [...saved, ...memoryLogs]) {
-        merged.set(JSON.stringify(entry), entry);
-      }
-      memoryLogs = [...merged.values()].slice(-MAX_LOGS);
-    }
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((entry): entry is SessionLog =>
+      entry !== null && typeof entry === "object" &&
+      typeof entry.pageId === "string" && typeof entry.sessionId === "number" &&
+      typeof entry.event === "string"
+    );
   } catch {
     // Storage can be disabled, full, or contain invalid JSON.
+    return [];
+  }
+}
+
+/** Merge stored logs (possibly written by other tabs) with this page's. */
+function mergeWithStorage() {
+  const merged = new Map<string, SessionLog>();
+  for (const entry of [...readStoredLogs(), ...memoryLogs]) {
+    merged.set(JSON.stringify(entry), entry);
+  }
+  memoryLogs = [...merged.values()].slice(-MAX_LOGS);
+}
+
+function readLogs(): SessionLog[] {
+  if (!loadedFromStorage) {
+    loadedFromStorage = true;
+    mergeWithStorage();
   }
   return memoryLogs;
 }
 
-function persistLog(entry: SessionLog) {
-  memoryLogs = [...readLogs(), entry].slice(-MAX_LOGS);
+function flushLogs() {
+  if (flushTimer) clearTimeout(flushTimer);
+  flushTimer = null;
+  mergeWithStorage();
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(memoryLogs));
   } catch {
@@ -40,8 +58,24 @@ function persistLog(entry: SessionLog) {
   }
 }
 
+function persistLog(entry: SessionLog, immediate = false) {
+  readLogs().push(entry);
+  if (memoryLogs.length > MAX_LOGS) memoryLogs = memoryLogs.slice(-MAX_LOGS);
+  if (immediate) {
+    flushLogs();
+  } else if (!flushTimer) {
+    flushTimer = setTimeout(flushLogs, FLUSH_DELAY_MS);
+    (flushTimer as { unref?: () => void }).unref?.();
+  }
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", () => { if (flushTimer) flushLogs(); });
+}
+
 /** Latest complete record for every retained session, plus its event history. */
 export function getSessionStatsSummary(): string {
+  if (flushTimer) flushLogs();
   const logs = readLogs();
   const sessions = new Map<string, SessionLog>();
   for (const entry of logs) sessions.set(`${entry.pageId}:${entry.sessionId}`, entry);
@@ -90,7 +124,7 @@ export function startSessionStats(pc: RTCPeerConnection) {
       counts: { ...counts },
     };
     console.log("[webrtc-session]", JSON.stringify(entry));
-    persistLog(entry);
+    persistLog(entry, event === "session-end");
   };
 
   const sample = async () => {
@@ -100,9 +134,6 @@ export function startSessionStats(pc: RTCPeerConnection) {
       const report = await pc.getStats();
       if (ended) return; // A closing peer must not update a finished session.
       report.forEach((stat) => {
-        if (stat.type === "outbound-rtp" && stat.kind === "video") {
-          console.log("[stats] outbound video:", stat.frameWidth, stat.frameHeight);
-        }
         // The PWA sends media; RTCP reports describe reception at the remote peer.
         if (stat.type !== "remote-inbound-rtp") return;
         if (validSeconds(stat.roundTripTime)) {

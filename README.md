@@ -52,33 +52,53 @@
 <img src="./assets/stream-ui.png" alt="Stream UI" width="300"/>
 
 
-### TODO:
-Add renegotiation logic for WebRTC
+## Running the Linux app
 
-Expiry for Codes
-Add TTL logic or clean-up mechanism:
+```bash
+cd linux-app
+python -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python main.py
 ```
-// Suggestion: Add this field when setting the code
-expiresAt: admin.firestore.Timestamp.fromDate(new Date(Date.now() + 10 * 60 * 1000)) // 10 mins
+
+Requirements: PipeWire (`pw-cat`, `pactl`, `pw-dump`) and the `v4l2loopback`
+DKMS module. On first launch the app creates its own loopback device labelled
+**PixelStreamer** (one polkit prompt). If v4l2loopback is already loaded by
+another app, a device is added alongside, and existing devices are left
+untouched. The virtual camera ("PixelStreamer") and microphone ("PixelStreamer
+Virtual Mic") stay available for as long as the app runs. Between sessions
+they carry black video and silence, so other apps keep them selected across
+reconnects.
+
+## Deploying the backend
+
+```bash
+cd firebase/functions && npm run deploy
 ```
-Add a scheduled function to remove expired codes.
+
+`checkOffer` / `checkAnswer` accept a `waitMs` long-poll parameter, and both
+clients use it. Older clients and servers still interoperate, because the
+clients fall back to short polling.
+
+Codes carry an `expiresAt` field, 24 h after creation. To have Firestore delete
+abandoned codes automatically, enable a TTL policy once:
+
+```bash
+gcloud firestore fields ttls update expiresAt --collection-group=codes --enable-ttl
+```
+
+Each function cold-starts separately. The PWA warms the ones it needs while the
+code is being typed. Setting `minInstances` on `checkOffer`, `checkAnswer` and
+`getTurnCredentials` removes cold starts entirely, at a small monthly cost.
+
+### TODO:
+ICE restart / renegotiation so a session survives a network change (needs a
+signaling channel that stays open during the session).
 
 Limit CORS to only the deployed link
 
 Rate Limiting or Abuse Protection
 Use Firebase App Check or limiting requests per IP.
 
-Additional Logging
-Log the actual code being generated and track failures more granularly:
-```
-functions.logger.info("Generated Code:", code);
-```
-
-Type Safety & Input Validation
-Use a schema validator (e.g. Zod or Joi) in production for complex payloads like SDP.
-
 Secure Data Structuring
 Move signaling data into subcollections under /codes/{code}/signals if you want finer access control.
 Mask or encrypt metadata.
-
-CI/CD integration

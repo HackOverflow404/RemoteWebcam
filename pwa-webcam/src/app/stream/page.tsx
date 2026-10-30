@@ -34,6 +34,7 @@ import type { MediaState } from "@/lib/useMediaStream";
 import useWebRTCStream from "@/lib/useWebRTCStream";
 import type { ConnectionState } from "@/lib/useWebRTCStream";
 import CopySessionStats from "@/components/CopySessionStats";
+import { getIceServers } from "@/lib/signaling";
 
 // SVG icon maps — no font loading required, works offline on iPhone
 const micIcons: Record<MediaState, IconType> = {
@@ -219,21 +220,24 @@ function StreamPage() {
 
   // --- startup ---
   useEffect(() => {
-    if (code) startMedia();
-  }, [code]);
+    if (!code) {
+      router.replace("/");
+      return;
+    }
+    // Fetch TURN credentials while the camera permission prompt is up.
+    void getIceServers();
+    startMedia();
+  }, [code]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (media && !isLoadingMedia && !isStreamOn) startStream();
-  }, [media, isLoadingMedia]);
+    if (media && !isLoadingMedia) startStream();
+  }, [media, isLoadingMedia, startStream]);
 
+  // Release the camera once a session has failed; it can't be resumed with
+  // the same code, so the user goes back and pairs again.
   useEffect(() => {
-    if (connectionStatus === "disconnected" && isStreamOn) stopMedia();
-  }, [connectionStatus]);
-
-
-  useEffect(() => {
-    return () => { stopStream(); };
-  }, [stopStream]);
+    if (connectionStatus === "error") stopMedia();
+  }, [connectionStatus, stopMedia]);
 
   const handleBack = useCallback(() => {
     stopStream();
@@ -255,8 +259,12 @@ function StreamPage() {
       className="stream-section"
       style={sectionLandscapeStyle}
       onDoubleClick={async () => {
-        const track = await flipCamera();
-        if (track && isStreamOn) replaceTrack("video", track);
+        try {
+          const track = await flipCamera();
+          if (track) await replaceTrack("video", track);
+        } catch (e) {
+          console.error("Camera flip failed:", e);
+        }
       }}
     >
       {/* Loading overlay */}

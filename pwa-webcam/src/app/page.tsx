@@ -1,16 +1,22 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import CopySessionStats from "@/components/CopySessionStats";
-
-const CodeInput = React.lazy(() => import("@/components/CodeInput"));
+import CodeInput from "@/components/CodeInput";
+import { validateCode, warmUpSignaling } from "@/lib/signaling";
 
 export default function Home() {
   const router = useRouter();
   const [code, setCode] = useState(Array(5).fill(""));
   const [streams, setStreams] = useState({ webcam: true, mic: true });
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Wake the signaling functions (cold starts) while the user types.
+  useEffect(() => {
+    warmUpSignaling();
+  }, []);
 
   const toggleWebcam = () => {
     setStreams((prev) => ({ ...prev, webcam: !prev.webcam }));
@@ -21,45 +27,29 @@ export default function Home() {
   };
 
   const handleStartStream = async () => {
+    if (isLoading) return;
     const joinedCode = code.join("").trim().toUpperCase();
 
     if (joinedCode.length !== 5) {
-      alert("Please enter a valid 5-character code.");
+      setError("Please enter the 5-character code shown on your computer.");
       return;
     }
 
     setIsLoading(true);
+    setError(null);
 
     try {
-      // Validate the code exists in Firestore via your Firebase Function
-      const response = await fetch(
-        "https://validatecode-qaf2yvcrrq-uc.a.run.app",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            code: joinedCode,
-          }),
-        }
-      );
-
-      const result = await response.json();
-
-      if (!(response.ok && result.success && result.valid)) {
-        console.error("Error:", result.error);
-        alert(`Invalid code: ${result.error}`);
-        setIsLoading(false);
-        return;
-      }
-
-      // Navigate to the stream page with parameters
-      console.log("Validated code, routing to stream");
+      await validateCode(joinedCode);
       router.push(
         `/stream?webcam=${streams.webcam}&mic=${streams.mic}&code=${joinedCode}`
       );
-    } catch (error: any) {
-      console.error("Error validating code:", error);
-      alert("Failed to validate code: " + error.message);
+    } catch (err: any) {
+      console.error("Error validating code:", err);
+      setError(
+        err?.status
+          ? `${err.message}. Generate a new code on your computer.`
+          : "Couldn't reach the server. Check your connection and try again."
+      );
       setIsLoading(false);
     }
   };
@@ -72,9 +62,12 @@ export default function Home() {
       <h2 className="my-5 text-4xl" aria-label="Enter Code">
         Enter Code:
       </h2>
-      <React.Suspense fallback={<div>Loading Code Input...</div>}>
-        <CodeInput code={code} setCode={setCode} />
-      </React.Suspense>
+      <CodeInput code={code} setCode={setCode} onSubmit={handleStartStream} />
+      {error && (
+        <p role="alert" className="w-9/10 text-center text-red-400 text-lg">
+          {error}
+        </p>
+      )}
       <button
         className={`w-9/10 my-5 px-5 py-5 rounded-2xl text-3xl text-center ${
           streams.webcam

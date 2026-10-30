@@ -4,51 +4,61 @@ import React, { useRef } from "react";
 interface CodeInputProps {
     code: string[];
     setCode: React.Dispatch<React.SetStateAction<string[]>>;
+    onSubmit?: () => void;
 }
 
-export default function CodeInput({ code, setCode }: CodeInputProps) {
+const clean = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+// Driven by onChange rather than keydown: Android virtual keyboards report
+// key "Unidentified" on keydown, so keydown-only handling ignored typing there.
+export default function CodeInput({ code, setCode, onSubmit }: CodeInputProps) {
     const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+    const focus = (i: number) => inputRefs.current[Math.max(0, Math.min(code.length - 1, i))]?.focus();
 
-    const handleKeyDown = (index: number, event: React.KeyboardEvent<HTMLInputElement>) => {
-        const key = event.key;
+    // Write `chars` starting at `index` (handles typing, paste and autofill).
+    const fill = (index: number, chars: string) => {
+        if (!chars) return;
+        setCode((prev) => {
+            const next = [...prev];
+            for (let i = 0; i < chars.length && index + i < next.length; i++) next[index + i] = chars[i];
+            return next;
+        });
+        focus(index + chars.length);
+    };
 
-        // Only allow alphanumeric keys
-        if (/^[a-zA-Z0-9]$/.test(key)) {
-            setCode((prevCode) => {
-                const newCode = [...prevCode];
-                newCode[index] = key.toUpperCase();
-                return newCode;
-            });
-
-            // Focus next input
-            if (index < code.length - 1) {
-                setTimeout(() => inputRefs.current[index + 1]?.focus(), 0);
-            }
-
-            event.preventDefault(); // Prevent character duplication
+    const handleChange = (index: number, e: React.ChangeEvent<HTMLInputElement>) => {
+        const value = clean(e.target.value);
+        if (!value) {
+            setCode((prev) => prev.map((c, i) => (i === index ? "" : c)));
+            return;
         }
+        // The box already held a character; keep only what was just typed.
+        const typed = value.length > 1 && code[index] && value.startsWith(code[index])
+            ? value.slice(1)
+            : value;
+        fill(index, typed);
+    };
 
-        // Handle Backspace
-        else if (key === "Backspace") {
-            if (code[index]) {
-                // Clear current box
-                setCode((prevCode) => {
-                    const newCode = [...prevCode];
-                    newCode[index] = "";
-                    return newCode;
-                });
-            } else if (index > 0) {
-                // Move focus back
-                setTimeout(() => inputRefs.current[index - 1]?.focus(), 0);
-                setCode((prevCode) => {
-                    const newCode = [...prevCode];
-                    newCode[index - 1] = "";
-                    return newCode;
-                });
-            }
-
-            event.preventDefault();
+    const handleKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (e.key === "Backspace" && !code[index] && index > 0) {
+            e.preventDefault();
+            setCode((prev) => prev.map((c, i) => (i === index - 1 ? "" : c)));
+            focus(index - 1);
+        } else if (e.key === "ArrowLeft") {
+            e.preventDefault();
+            focus(index - 1);
+        } else if (e.key === "ArrowRight") {
+            e.preventDefault();
+            focus(index + 1);
+        } else if (e.key === "Enter") {
+            e.preventDefault();
+            onSubmit?.();
         }
+    };
+
+    const handlePaste = (index: number, e: React.ClipboardEvent<HTMLInputElement>) => {
+        e.preventDefault();
+        fill(index, clean(e.clipboardData.getData("text")));
     };
 
     return (
@@ -59,11 +69,16 @@ export default function CodeInput({ code, setCode }: CodeInputProps) {
                     ref={(el) => { inputRefs.current[index] = el; }}
                     type="text"
                     inputMode="text"
-                    maxLength={1}
+                    autoCapitalize="characters"
+                    autoCorrect="off"
+                    autoComplete={index === 0 ? "one-time-code" : "off"}
+                    spellCheck={false}
                     value={char}
+                    onChange={(e) => handleChange(index, e)}
                     onKeyDown={(e) => handleKeyDown(index, e)}
-                    onChange={() => {}}
-                    aria-label={`Code input ${index + 1}`}
+                    onPaste={(e) => handlePaste(index, e)}
+                    onFocus={(e) => e.target.select()}
+                    aria-label={`Code character ${index + 1}`}
                     className="w-15 h-25 bg-gray-400 rounded-2xl text-center text-black text-4xl font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
             ))}

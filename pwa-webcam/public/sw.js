@@ -1,4 +1,4 @@
-const CACHE_NAME = "pixelstreamer-v2";
+const CACHE_NAME = "pixelstreamer-v3";
 const STATIC_ASSETS = [
   "/",
   "/manifest.webmanifest",
@@ -6,28 +6,11 @@ const STATIC_ASSETS = [
   "/icons/icon-512x512.png",
 ];
 
-const BYPASS_CACHE_PATTERNS = [
-  /\.a\.run\.app/,
-  /updateoffer/i,
-  /getturncredentials/i,
-  /submitoffer/i,
-  /validatecode/i,
-  /checkoffer/i,
-  /generatecode/i,
-  /submitanswer/i,
-  /deletecode/i,
-  /checkanswer/i,
-  /firestore\.googleapis\.com/,
-  /firebaseio\.com/,
-  /googleapis\.com.*firebase/,
-  /\/stream/,
-  /fonts\.gstatic\.com/,
-  /fonts\.googleapis\.com/,
-];
-
-// Helper: Should a request bypass the cache?
-const shouldBypassCache = (request) =>
-  BYPASS_CACHE_PATTERNS.some((pattern) => pattern.test(request.url));
+// Content-hashed build output and icons never change under the same URL, so
+// they're served cache-first. Everything else (HTML, RSC payloads, manifest)
+// is network-first so a new deploy is picked up immediately.
+const IMMUTABLE = [/^\/_next\/static\//, /^\/icons\//];
+const isImmutable = (url) => IMMUTABLE.some((re) => re.test(url.pathname));
 
 // Install: Cache static assets
 self.addEventListener("install", (event) => {
@@ -65,50 +48,31 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
-
-  console.log("[SW] Fetching:", req.url, "| bypass?", shouldBypassCache(req));
+  const url = new URL(req.url);
+  // Signaling APIs, fonts, etc. go straight to the network, untouched.
+  if (url.origin !== self.location.origin) return;
 
   event.respondWith(
     (async () => {
-      try {
-        if (shouldBypassCache(req)) return await fetch(req);
-
-        if (req.mode === "navigate") {
-          try {
-            const response = await fetch(req, { cache: "no-cache" });
-            if (response.ok) return response;
-            throw new Error("Bad response");
-          } catch {
-            return await serveOfflinePage();
-          }
-        }
-
+      if (isImmutable(url)) {
         const cached = await caches.match(req);
         if (cached) return cached;
-
+      }
+      try {
         const netRes = await fetch(req);
-        if (
-          netRes.ok &&
-          req.url.startsWith(self.location.origin) &&
-          !shouldBypassCache(req)
-        ) {
-          try {
-            const cache = await caches.open(CACHE_NAME);
-            cache.put(req, netRes.clone());
-          } catch {}
+        if (netRes.ok && netRes.type === "basic") {
+          const copy = netRes.clone();
+          caches.open(CACHE_NAME).then((c) => c.put(req, copy)).catch(() => {});
         }
-
         return netRes;
       } catch {
-        if (req.mode === "navigate") return await serveOfflinePage();
-        const fallback = await caches.match(req);
-        return (
-          fallback ||
-          new Response("Resource not available offline", {
-            status: 503,
-            headers: { "Content-Type": "text/plain" },
-          })
-        );
+        const cached = await caches.match(req, { ignoreSearch: req.mode === "navigate" });
+        if (cached) return cached;
+        if (req.mode === "navigate") return serveOfflinePage();
+        return new Response("Resource not available offline", {
+          status: 503,
+          headers: { "Content-Type": "text/plain" },
+        });
       }
     })()
   );

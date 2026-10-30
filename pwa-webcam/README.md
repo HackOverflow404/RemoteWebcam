@@ -39,7 +39,8 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
 
 Open the **browser DevTools Console on the device running the PWA** and filter
 for `[webrtc-session]`. The same JSON records are persisted in this browser's
-localStorage under `webrtc-session`, retaining the most recent 2,000 events
+localStorage under `webrtc-session` (written in batches every few seconds
+and immediately at session end, so the main thread stays free while streaming), retaining the most recent 2,000 events
 across reloads. They are not sent to the receiver or a logging service.
 If storage is unavailable or full, records remain available in page memory.
 

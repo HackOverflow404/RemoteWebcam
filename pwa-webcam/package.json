@@ -10,7 +10,6 @@
     "deploy": "next build"
   },
   "dependencies": {
-    "@stream-io/video-react-sdk": "^1.12.11",
     "next": "^15.4.2",
     "react": "19.1.0",
     "react-dom": "19.1.0",
